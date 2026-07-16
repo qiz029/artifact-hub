@@ -1,0 +1,29 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-artifact_hub}
+      POSTGRES_USER: ${POSTGRES_USER:-artifact}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-artifact}
+    volumes:
+      - artifact_hub_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  artifact-hub:
+    build: .
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://artifact:artifact@postgres:5432/artifact_hub?sslmode=disable}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:${PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  artifact_hub_data:

@@ -1,0 +1,8 @@
+.git
+.DS_Store
+.env
+bin
+design
+frontend/node_modules
+frontend/dist
+frontend/*.tsbuildinfo
