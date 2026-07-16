@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  ArrowLeft,
   Box,
   Check,
   ChevronRight,
@@ -30,6 +31,7 @@ import type { Artifact, Collection } from './types'
 const colors = ['#5E6AD2', '#3E9B6F', '#D2914B', '#C24444', '#4C9BD9']
 
 type Modal = 'collection' | 'artifact' | null
+type MobileStage = 'collections' | 'artifacts' | 'detail'
 
 function App() {
   const [collections, setCollections] = useState<Collection[]>([])
@@ -43,12 +45,16 @@ function App() {
   const [fullscreen, setFullscreen] = useState(false)
   const [collectionsCollapsed, setCollectionsCollapsed] = useState(false)
   const [artifactsCollapsed, setArtifactsCollapsed] = useState(false)
+  const [mobileStage, setMobileStage] = useState<MobileStage>('collections')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
   const selectedCollection = collections.find((item) => item.id === collectionId) ?? null
   const selectedArtifact = artifacts.find((item) => item.id === artifactId) ?? null
+  const visibleCollections = mobileStage === 'collections' && query
+    ? collections.filter((item) => `${item.name} ${item.description}`.toLowerCase().includes(query.toLowerCase()))
+    : collections
 
   const refreshCollections = useCallback(async () => {
     const next = await api.collections()
@@ -103,8 +109,11 @@ function App() {
 
   const selectCollection = (id: string) => {
     setCollectionId(id)
+    setArtifacts([])
+    setArtifactId(null)
     setQuery('')
     setDetailsOpen(false)
+    setMobileStage('artifacts')
   }
 
   const afterCollectionCreated = async (collection: Collection) => {
@@ -119,6 +128,7 @@ function App() {
     setArtifactId(artifact.id)
     await refreshCollections()
     setModal(null)
+    setMobileStage('detail')
   }
 
   const removeArtifact = async () => {
@@ -129,6 +139,7 @@ function App() {
       setArtifacts(next)
       setArtifactId(next[0]?.id ?? null)
       await refreshCollections()
+      setMobileStage('artifacts')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '删除失败')
     }
@@ -141,10 +152,32 @@ function App() {
     window.setTimeout(() => setCopied(false), 1600)
   }
 
+  const mobileBack = () => {
+    setDetailsOpen(false)
+    setMobileStage((stage) => stage === 'detail' ? 'artifacts' : 'collections')
+  }
+
+  const mobileTitle = mobileStage === 'collections'
+    ? 'Artifact Hub'
+    : mobileStage === 'artifacts'
+      ? selectedCollection?.name ?? 'Artifacts'
+      : selectedArtifact?.title ?? 'Artifact'
+
   if (loading) return <LoadingScreen />
 
   return (
-    <div className={`app-shell ${fullscreen ? 'is-fullscreen' : ''} ${collectionsCollapsed ? 'collections-collapsed' : ''} ${artifactsCollapsed ? 'artifacts-collapsed' : ''}`}>
+    <div className={`app-shell mobile-stage-${mobileStage} ${fullscreen ? 'is-fullscreen' : ''} ${collectionsCollapsed ? 'collections-collapsed' : ''} ${artifactsCollapsed ? 'artifacts-collapsed' : ''}`}>
+      {!fullscreen && (
+        <header className="mobile-header">
+          {mobileStage !== 'collections' ? (
+            <button className="mobile-back" type="button" aria-label="返回" onClick={mobileBack}><ArrowLeft size={19} /></button>
+          ) : <div className="mobile-brand-mark"><Box size={15} /></div>}
+          <h1>{mobileTitle}</h1>
+          {mobileStage === 'collections' && <button className="mobile-primary-action" type="button" aria-label="新建 Collection" onClick={() => setModal('collection')}><Plus size={19} /></button>}
+          {mobileStage === 'artifacts' && selectedCollection && <button className="mobile-primary-action" type="button" aria-label="上传 Artifact" onClick={() => setModal('artifact')}><Plus size={19} /></button>}
+          {mobileStage === 'detail' && selectedArtifact && <button className="mobile-delete-action" type="button" onClick={removeArtifact}><Trash2 size={14} /><span>删除</span></button>}
+        </header>
+      )}
       {!fullscreen && (
         <aside className="collections-panel">
           {collectionsCollapsed ? (
@@ -163,10 +196,10 @@ function App() {
               </div>
               <div className="panel-label"><span>Collections</span><span>{collections.length}</span></div>
               <nav className="collections-list">
-                {collections.map((collection) => (
+                {visibleCollections.map((collection) => (
                   <button className={collection.id === collectionId ? 'collection active' : 'collection'} onClick={() => selectCollection(collection.id)} key={collection.id}>
                     <span className="collection-dot" style={{ background: collection.color }} />
-                    <span className="collection-name">{collection.name}</span>
+                    <span className="collection-copy"><span className="collection-name">{collection.name}</span><span className="collection-description">{collection.description || '暂无描述'}</span></span>
                     <span className="collection-count">{collection.artifactCount}</span>
                     <ChevronRight size={13} className="collection-chevron" />
                   </button>
@@ -196,9 +229,13 @@ function App() {
                   <CollapseButton label="收起 Artifact 侧边栏" onClick={() => setArtifactsCollapsed(true)} />
                 </div>
               </header>
+              <div className="mobile-artifact-search">
+                <Search size={15} />
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 artifact" />
+              </div>
               <div className="artifact-list">
                 {artifacts.map((artifact) => (
-                  <button className={artifact.id === artifactId ? 'artifact-row active' : 'artifact-row'} key={artifact.id} onClick={() => { setArtifactId(artifact.id); setDetailsOpen(false) }}>
+                  <button className={artifact.id === artifactId ? 'artifact-row active' : 'artifact-row'} key={artifact.id} onClick={() => { setArtifactId(artifact.id); setDetailsOpen(false); setMobileStage('detail') }}>
                     <div className="artifact-row-top">
                       <span className={`file-icon ${artifact.type}`}>{artifact.type === 'html' ? <FileCode2 size={15} /> : <FileText size={15} />}</span>
                       <strong>{artifact.title}</strong>
@@ -240,6 +277,15 @@ function App() {
                 <button className="ghost-button danger" onClick={removeArtifact}><Trash2 size={15} /></button>
               </div>
             </header>
+            <div className="mobile-artifact-meta">
+              <div className="mobile-meta-row">
+                <span className="type-pill">{selectedArtifact.type === 'html' ? 'HTML' : 'MARKDOWN'}</span>
+                <time>{relativeTime(selectedArtifact.createdAt)}</time>
+                <span className="mobile-immutable"><LockKeyhole size={11} /> Immutable</span>
+                <button type="button" onClick={() => setDetailsOpen(true)}><Info size={15} /> 元数据</button>
+              </div>
+              {!!selectedArtifact.tags.length && <div className="mobile-tag-row">{selectedArtifact.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div>}
+            </div>
             <div className="preview-stage">
               {selectedArtifact.type === 'html' ? (
                 <div className="browser-frame">
