@@ -1,16 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
+  ArrowUpRight,
   ArrowLeft,
   Box,
   Check,
   ChevronRight,
-  Clipboard,
   Code2,
+  Copy,
+  Database,
   FileCode2,
   FileText,
   FolderPlus,
-  Hash,
   Info,
+  Layers3,
   LockKeyhole,
   Maximize2,
   MoreHorizontal,
@@ -19,16 +21,16 @@ import {
   Plus,
   Search,
   ShieldCheck,
-  Trash2,
   UploadCloud,
   X,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { api } from './api'
+import { ArtifactDetails } from './components/ArtifactDetails'
+import { ArtifactModal, CollectionModal, DeleteArtifactModal } from './components/ArtifactModals'
+import { relativeTime } from './lib/format'
 import type { Artifact, Collection } from './types'
-
-const colors = ['#5E6AD2', '#3E9B6F', '#D2914B', '#C24444', '#4C9BD9']
 
 type Modal = 'collection' | 'artifact' | null
 type MobileStage = 'collections' | 'artifacts' | 'detail'
@@ -39,8 +41,10 @@ function App() {
   const [collectionId, setCollectionId] = useState<string | null>(null)
   const [artifactId, setArtifactId] = useState<string | null>(null)
   const [markdown, setMarkdown] = useState('')
-  const [query, setQuery] = useState('')
+  const [collectionQuery, setCollectionQuery] = useState('')
+  const [artifactQuery, setArtifactQuery] = useState('')
   const [modal, setModal] = useState<Modal>(null)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
   const [collectionsCollapsed, setCollectionsCollapsed] = useState(false)
@@ -52,9 +56,10 @@ function App() {
 
   const selectedCollection = collections.find((item) => item.id === collectionId) ?? null
   const selectedArtifact = artifacts.find((item) => item.id === artifactId) ?? null
-  const visibleCollections = mobileStage === 'collections' && query
-    ? collections.filter((item) => `${item.name} ${item.description}`.toLowerCase().includes(query.toLowerCase()))
+  const visibleCollections = collectionQuery
+    ? collections.filter((item) => `${item.name} ${item.description}`.toLowerCase().includes(collectionQuery.toLowerCase()))
     : collections
+  const totalArtifacts = collections.reduce((total, collection) => total + collection.artifactCount, 0)
 
   const refreshCollections = useCallback(async () => {
     const next = await api.collections()
@@ -63,7 +68,7 @@ function App() {
   }, [])
 
   useEffect(() => {
-    refreshCollections().catch((reason) => setError(reason.message)).finally(() => setLoading(false))
+    refreshCollections().catch((reason) => setError(reason instanceof Error ? reason.message : '无法读取 Collection')).finally(() => setLoading(false))
   }, [refreshCollections])
 
   useEffect(() => {
@@ -72,35 +77,60 @@ function App() {
       setArtifactId(null)
       return
     }
+    const controller = new AbortController()
     const timer = window.setTimeout(() => {
-      api.artifacts(collectionId, query)
+      api.artifacts(collectionId, artifactQuery, controller.signal)
         .then((next) => {
           setArtifacts(next)
           setArtifactId((current) => current && next.some((item) => item.id === current) ? current : next[0]?.id ?? null)
         })
-        .catch((reason) => setError(reason.message))
-    }, query ? 180 : 0)
-    return () => window.clearTimeout(timer)
-  }, [collectionId, query])
+        .catch((reason) => {
+          if (reason instanceof DOMException && reason.name === 'AbortError') return
+          setError(reason instanceof Error ? reason.message : '无法读取 Artifact')
+        })
+    }, artifactQuery ? 180 : 0)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [collectionId, artifactQuery])
 
   useEffect(() => {
     if (selectedArtifact?.type !== 'markdown') {
       setMarkdown('')
       return
     }
-    api.artifactContent(selectedArtifact.id).then(setMarkdown).catch((reason) => setError(reason.message))
+    const controller = new AbortController()
+    api.artifactContent(selectedArtifact.id, controller.signal).then(setMarkdown).catch((reason) => {
+      if (reason instanceof DOMException && reason.name === 'AbortError') return
+      setError(reason instanceof Error ? reason.message : '无法读取 Markdown 内容')
+    })
+    return () => controller.abort()
   }, [selectedArtifact?.id, selectedArtifact?.type])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const focusVisibleSearch = (...selectors: string[]) => {
+        selectors
+          .map((selector) => document.querySelector<HTMLInputElement>(selector))
+          .find((input) => input && input.getClientRects().length > 0)
+          ?.focus()
+      }
       if (event.key === 'Escape') {
         setModal(null)
+        setDeleteConfirmOpen(false)
         setFullscreen(false)
         setDetailsOpen(false)
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
-        document.querySelector<HTMLInputElement>('#artifact-search')?.focus()
+        focusVisibleSearch('#collection-search', '#artifact-search')
+      }
+      const target = event.target as HTMLElement | null
+      const isTyping = target?.matches('input, textarea, [contenteditable="true"]')
+      if (event.key === '/' && !isTyping && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        event.preventDefault()
+        focusVisibleSearch('#artifact-search', '#collection-search')
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -108,10 +138,14 @@ function App() {
   }, [])
 
   const selectCollection = (id: string) => {
+    const isNewCollection = id !== collectionId
     setCollectionId(id)
-    setArtifacts([])
-    setArtifactId(null)
-    setQuery('')
+    if (isNewCollection) {
+      setArtifacts([])
+      setArtifactId(null)
+    }
+    setCollectionQuery('')
+    setArtifactQuery('')
     setDetailsOpen(false)
     setMobileStage('artifacts')
   }
@@ -132,24 +166,31 @@ function App() {
   }
 
   const removeArtifact = async () => {
-    if (!selectedArtifact || !window.confirm(`删除“${selectedArtifact.title}”？该操作无法撤销。`)) return
+    if (!selectedArtifact) return false
     try {
       await api.deleteArtifact(selectedArtifact.id)
-      const next = await api.artifacts(selectedArtifact.collectionId, query)
+      const next = await api.artifacts(selectedArtifact.collectionId, artifactQuery)
       setArtifacts(next)
       setArtifactId(next[0]?.id ?? null)
       await refreshCollections()
       setMobileStage('artifacts')
+      setDeleteConfirmOpen(false)
+      return true
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '删除失败')
+      return false
     }
   }
 
   const copyLink = async () => {
     if (!selectedArtifact) return
-    await navigator.clipboard.writeText(selectedArtifact.publicUrl)
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 1600)
+    try {
+      await navigator.clipboard.writeText(selectedArtifact.publicUrl)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    } catch {
+      setError('无法复制链接，请从元数据面板中手动复制')
+    }
   }
 
   const mobileBack = () => {
@@ -175,7 +216,7 @@ function App() {
           <h1>{mobileTitle}</h1>
           {mobileStage === 'collections' && <button className="mobile-primary-action" type="button" aria-label="新建 Collection" onClick={() => setModal('collection')}><Plus size={19} /></button>}
           {mobileStage === 'artifacts' && selectedCollection && <button className="mobile-primary-action" type="button" aria-label="上传 Artifact" onClick={() => setModal('artifact')}><Plus size={19} /></button>}
-          {mobileStage === 'detail' && selectedArtifact && <button className="mobile-delete-action" type="button" onClick={removeArtifact}><Trash2 size={14} /><span>删除</span></button>}
+          {mobileStage === 'detail' && selectedArtifact && <button className="mobile-primary-action link-action" type="button" aria-label={copied ? '稳定链接已复制' : '复制稳定链接'} onClick={copyLink}>{copied ? <Check size={18} /> : <Copy size={18} />}</button>}
         </header>
       )}
       {!fullscreen && (
@@ -186,13 +227,20 @@ function App() {
             <>
               <div className="brand">
                 <div className="brand-mark"><Box size={14} strokeWidth={2.4} /></div>
-                <div className="brand-copy"><strong>Artifact Hub</strong><span>immutable archive</span></div>
+                <div className="brand-copy"><strong>Artifact Hub</strong><span>Permanent host</span></div>
                 <CollapseButton label="收起 Collection 侧边栏" onClick={() => setCollectionsCollapsed(true)} />
               </div>
               <div className="global-search">
                 <Search size={14} />
-                <input id="artifact-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 artifact" />
+                <input id="collection-search" value={collectionQuery} onChange={(event) => setCollectionQuery(event.target.value)} placeholder="搜索 Collection" />
                 <kbd>⌘K</kbd>
+              </div>
+              <div className="library-card">
+                <div className="library-card-glow" />
+                <div className="library-kicker"><Database size={12} /> Permanent library</div>
+                <strong>{totalArtifacts}</strong>
+                <span>artifacts hosted across {collections.length} {collections.length === 1 ? 'collection' : 'collections'}</span>
+                <div className="library-signal"><i /> Postgres-backed · content addressed</div>
               </div>
               <div className="panel-label"><span>Collections</span><span>{collections.length}</span></div>
               <nav className="collections-list">
@@ -206,7 +254,7 @@ function App() {
                 ))}
                 <button className="new-collection" onClick={() => setModal('collection')}><FolderPlus size={14} /> 新建 Collection</button>
               </nav>
-              <div className="storage-note"><ShieldCheck size={14} /><span>内容由你的 Postgres 持久化</span></div>
+              <div className="storage-note"><ShieldCheck size={14} /><span>内容与指纹不可变</span></div>
             </>
           )}
         </aside>
@@ -222,16 +270,18 @@ function App() {
                 <div>
                   <p className="eyebrow">Collection</p>
                   <h1>{selectedCollection?.name ?? '尚无 Collection'}</h1>
-                  <p>{selectedCollection?.description || '创建一个 collection，开始保存你的工作。'}</p>
+                  <p>{selectedCollection?.description || '创建一个 Collection，开始发布可长期引用的工作。'}</p>
+                  {selectedCollection && <div className="collection-status"><i /><span>{selectedCollection.artifactCount} published</span></div>}
                 </div>
                 <div className="artifact-header-actions">
                   {selectedCollection && <button className="icon-primary" aria-label="上传 artifact" onClick={() => setModal('artifact')}><Plus size={16} /></button>}
                   <CollapseButton label="收起 Artifact 侧边栏" onClick={() => setArtifactsCollapsed(true)} />
                 </div>
               </header>
-              <div className="mobile-artifact-search">
+              <div className="artifact-search">
                 <Search size={15} />
-                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 artifact" />
+                <input id="artifact-search" value={artifactQuery} onChange={(event) => setArtifactQuery(event.target.value)} placeholder={`在 ${selectedCollection?.name ?? 'Collection'} 中搜索`} />
+                <kbd>/</kbd>
               </div>
               <div className="artifact-list">
                 {artifacts.map((artifact) => (
@@ -251,9 +301,9 @@ function App() {
                 {!artifacts.length && (
                   <div className="empty-list">
                     <UploadCloud size={22} />
-                    <strong>{query ? '没有匹配结果' : '这里还没有 artifact'}</strong>
-                    <span>{query ? '试试其他关键词' : '支持 HTML 与 Markdown，最大 10 MB'}</span>
-                    {!query && selectedCollection && <button onClick={() => setModal('artifact')}>上传第一个</button>}
+                    <strong>{artifactQuery ? '没有匹配结果' : '这里还没有 Artifact'}</strong>
+                    <span>{artifactQuery ? '试试其他关键词' : '发布 HTML 或 Markdown，获得一个稳定地址'}</span>
+                    {!artifactQuery && selectedCollection && <button onClick={() => setModal('artifact')}>发布第一个</button>}
                   </div>
                 )}
               </div>
@@ -269,12 +319,14 @@ function App() {
               <div className="preview-title">
                 <div className="breadcrumb"><span>{selectedCollection?.name}</span><ChevronRight size={12} /><span>{selectedArtifact.type === 'html' ? 'HTML' : 'Markdown'}</span></div>
                 <h2>{selectedArtifact.title}</h2>
+                {selectedArtifact.description && <p>{selectedArtifact.description}</p>}
               </div>
               <div className="preview-actions">
-                <span className="immutable-badge"><LockKeyhole size={12} /> Immutable</span>
-                <button className="ghost-button mobile-details" onClick={() => setDetailsOpen(true)}><Info size={15} /> Details</button>
-                <button className="ghost-button" onClick={() => setFullscreen((value) => !value)}><Maximize2 size={15} />{fullscreen ? '退出' : '全屏'}</button>
-                <button className="ghost-button danger" onClick={removeArtifact}><Trash2 size={15} /></button>
+                <span className="published-badge"><i /> Published</span>
+                <button className="ghost-button copy-link-button" type="button" onClick={copyLink}>{copied ? <Check size={15} /> : <Copy size={15} />}{copied ? '已复制' : '复制链接'}</button>
+                <a className="ghost-button open-link-button" href={selectedArtifact.publicUrl} target="_blank" rel="noreferrer"><ArrowUpRight size={15} /><span>打开</span></a>
+                <button className="ghost-button mobile-details" type="button" onClick={() => setDetailsOpen(true)}><Info size={15} /> 元数据</button>
+                <button className="ghost-button" type="button" onClick={() => setFullscreen((value) => !value)}><Maximize2 size={15} />{fullscreen ? '退出' : '全屏'}</button>
               </div>
             </header>
             <div className="mobile-artifact-meta">
@@ -289,7 +341,7 @@ function App() {
             <div className="preview-stage">
               {selectedArtifact.type === 'html' ? (
                 <div className="browser-frame">
-                  <div className="browser-bar"><i /><i /><i /><span>{selectedArtifact.originalFilename}</span><MoreHorizontal size={15} /></div>
+                  <div className="browser-bar"><i /><i /><i /><span>{selectedArtifact.publicUrl.replace(/^https?:\/\//, '')}</span><MoreHorizontal size={15} /></div>
                   <iframe title={selectedArtifact.title} src={selectedArtifact.contentUrl} sandbox="allow-scripts allow-forms" />
                 </div>
               ) : (
@@ -301,62 +353,25 @@ function App() {
           </>
         ) : (
           <div className="empty-preview">
-            <div className="empty-preview-mark"><Code2 size={26} /></div>
-            <h2>把成品放在一个稳定的地方</h2>
-            <p>选择一个 artifact 查看内容，或上传一份新的 HTML / Markdown 文件。</p>
-            {selectedCollection && <button className="primary-button" onClick={() => setModal('artifact')}><UploadCloud size={16} /> 上传 Artifact</button>}
+            <div className="empty-preview-orbit"><div className="empty-preview-mark"><Layers3 size={25} /></div><i /><i /><i /></div>
+            <span className="empty-preview-kicker">Content-addressed workspace</span>
+            <h2>Publish once. Reference forever.</h2>
+            <p>把 HTML 与 Markdown 成品变成稳定、可验证、可分享的 Artifact。</p>
+            <div className="empty-preview-features"><span><LockKeyhole size={13} /> Immutable</span><span><Code2 size={13} /> Sandboxed</span><span><Database size={13} /> Self-hosted</span></div>
+            {selectedCollection && <button className="primary-button" onClick={() => setModal('artifact')}><UploadCloud size={16} /> 发布 Artifact</button>}
           </div>
         )}
       </main>
 
-      {selectedArtifact && !fullscreen && (
-        <DetailsPanel artifact={selectedArtifact} open={detailsOpen} copied={copied} onClose={() => setDetailsOpen(false)} onCopy={copyLink} />
-      )}
+      {selectedArtifact && !fullscreen && detailsOpen && <button className="details-scrim" type="button" aria-label="关闭元数据" onClick={() => setDetailsOpen(false)} />}
+      {selectedArtifact && !fullscreen && <ArtifactDetails artifact={selectedArtifact} open={detailsOpen} copied={copied} onClose={() => setDetailsOpen(false)} onCopy={copyLink} onDelete={() => { setDetailsOpen(false); setDeleteConfirmOpen(true) }} />}
 
       {modal === 'collection' && <CollectionModal onClose={() => setModal(null)} onCreated={afterCollectionCreated} />}
       {modal === 'artifact' && selectedCollection && <ArtifactModal collection={selectedCollection} onClose={() => setModal(null)} onCreated={afterArtifactCreated} />}
+      {deleteConfirmOpen && selectedArtifact && <DeleteArtifactModal artifact={selectedArtifact} onClose={() => setDeleteConfirmOpen(false)} onConfirm={removeArtifact} />}
       {error && <div className="toast error"><span>{error}</span><button onClick={() => setError(null)}><X size={14} /></button></div>}
     </div>
   )
-}
-
-function DetailsPanel({ artifact, open, copied, onClose, onCopy }: { artifact: Artifact; open: boolean; copied: boolean; onClose: () => void; onCopy: () => void }) {
-  const metadata = useMemo(() => Object.entries(artifact.metadata ?? {}), [artifact.metadata])
-  return (
-    <aside className={`details-panel ${open ? 'open' : ''}`}>
-      <div className="details-heading"><div><p className="eyebrow">Artifact details</p><h3>元数据</h3></div><button onClick={onClose}><X size={16} /></button></div>
-      <section className="details-section">
-        <Detail label="File" value={artifact.originalFilename} mono />
-        <Detail label="Format" value={`${artifact.type.toUpperCase()} · ${artifact.mediaType}`} />
-        <Detail label="Size" value={formatBytes(artifact.sizeBytes)} />
-        <Detail label="Created" value={new Date(artifact.createdAt).toLocaleString('zh-CN')} />
-      </section>
-      <section className="details-section">
-        <div className="detail-label">Tags</div>
-        <div className="tag-cloud">{artifact.tags.length ? artifact.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>) : <span className="muted">没有标签</span>}</div>
-      </section>
-      <section className="details-section checksum">
-        <div className="detail-label"><Hash size={12} /> SHA-256</div>
-        <code>{artifact.sha256}</code>
-      </section>
-      {!!metadata.length && (
-        <section className="details-section custom-metadata">
-          <div className="detail-label">Custom metadata</div>
-          {metadata.map(([key, value]) => <Detail key={key} label={key} value={typeof value === 'string' ? value : JSON.stringify(value)} mono />)}
-        </section>
-      )}
-      <div className="details-spacer" />
-      <section className="details-section public-link">
-        <div className="detail-label">Stable public URL</div>
-        <button onClick={onCopy}><span>{artifact.publicUrl.replace(/^https?:\/\//, '')}</span>{copied ? <Check size={14} /> : <Clipboard size={14} />}</button>
-        <p><LockKeyhole size={11} /> 只要 artifact 存在，这个地址就不会变。</p>
-      </section>
-    </aside>
-  )
-}
-
-function Detail({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return <div className="detail-row"><span>{label}</span><strong className={mono ? 'mono' : ''}>{value}</strong></div>
 }
 
 function CollapseButton({ label, onClick }: { label: string; onClick: () => void }) {
@@ -367,109 +382,8 @@ function SidebarRail({ label, onExpand }: { label: string; onExpand: () => void 
   return <button className="sidebar-rail" type="button" aria-label={`展开 ${label} 侧边栏`} title={`展开 ${label} 侧边栏`} onClick={onExpand}><PanelLeftOpen size={16} /><span>{label}</span></button>
 }
 
-function CollectionModal({ onClose, onCreated }: { onClose: () => void; onCreated: (collection: Collection) => void }) {
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [color, setColor] = useState(colors[0])
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault()
-    setSaving(true)
-    try { onCreated(await api.createCollection({ name, description, color })) }
-    catch (reason) { setError(reason instanceof Error ? reason.message : '创建失败'); setSaving(false) }
-  }
-  return (
-    <ModalFrame title="新建 Collection" subtitle="把一组相关的 artifact 收在一起。" onClose={onClose}>
-      <form onSubmit={submit}>
-        <Field label="名称"><input autoFocus required maxLength={120} value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：产品发布" /></Field>
-        <Field label="描述"><textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="这一组内容是关于什么的？" /></Field>
-        <Field label="标识颜色"><div className="color-picker">{colors.map((item) => <button type="button" aria-label={item} className={color === item ? 'selected' : ''} style={{ background: item }} onClick={() => setColor(item)} key={item} />)}</div></Field>
-        {error && <p className="form-error">{error}</p>}
-        <ModalActions saving={saving} onClose={onClose} action="创建 Collection" />
-      </form>
-    </ModalFrame>
-  )
-}
-
-function ArtifactModal({ collection, onClose, onCreated }: { collection: Collection; onClose: () => void; onCreated: (artifact: Artifact) => void }) {
-  const [file, setFile] = useState<File | null>(null)
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
-  const [tags, setTags] = useState('')
-  const [metadata, setMetadata] = useState('{}')
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
-  const pickFile = (next: File | null) => {
-    if (!next) return
-    setFile(next)
-    if (!title) setTitle(next.name.replace(/\.(html?|md|markdown)$/i, ''))
-  }
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault()
-    if (!file) { setError('请选择一个文件'); return }
-    try { JSON.parse(metadata) } catch { setError('自定义元数据必须是有效 JSON'); return }
-    const form = new FormData()
-    form.set('file', file)
-    form.set('title', title)
-    form.set('description', description)
-    form.set('tags', tags)
-    form.set('metadata', metadata)
-    setSaving(true)
-    try { onCreated(await api.uploadArtifact(collection.id, form)) }
-    catch (reason) { setError(reason instanceof Error ? reason.message : '上传失败'); setSaving(false) }
-  }
-  return (
-    <ModalFrame title="上传 Artifact" subtitle={`保存到 ${collection.name}。发布后内容与元数据不可修改。`} onClose={onClose} wide>
-      <form onSubmit={submit}>
-        <input ref={inputRef} className="visually-hidden" type="file" accept=".html,.htm,.md,.markdown,text/html,text/markdown" onChange={(event) => pickFile(event.target.files?.[0] ?? null)} />
-        <button type="button" className={`drop-zone ${file ? 'has-file' : ''}`} onClick={() => inputRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); pickFile(event.dataTransfer.files[0] ?? null) }}>
-          {file ? <><span className={`upload-file-icon ${file.name.match(/\.html?$/i) ? 'html' : 'markdown'}`}>{file.name.match(/\.html?$/i) ? <FileCode2 size={20} /> : <FileText size={20} />}</span><div><strong>{file.name}</strong><span>{formatBytes(file.size)} · 点击更换</span></div><Check size={18} className="upload-check" /></> : <><UploadCloud size={24} /><strong>拖入 HTML 或 Markdown 文件</strong><span>或点击浏览 · 最大 10 MB</span></>}
-        </button>
-        <div className="form-grid">
-          <Field label="标题"><input required maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Artifact 标题" /></Field>
-          <Field label="标签"><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="release, docs, v1" /></Field>
-        </div>
-        <Field label="描述"><input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="一句话说明这个 artifact" /></Field>
-        <Field label="自定义元数据（JSON）"><textarea className="code-input" rows={4} value={metadata} onChange={(event) => setMetadata(event.target.value)} spellCheck={false} /></Field>
-        <div className="immutable-callout"><LockKeyhole size={15} /><div><strong>Immutable by design</strong><span>上传后不可覆盖或编辑；如需修改，请创建新的 artifact。</span></div></div>
-        {error && <p className="form-error">{error}</p>}
-        <ModalActions saving={saving} onClose={onClose} action="上传并发布" />
-      </form>
-    </ModalFrame>
-  )
-}
-
-function ModalFrame({ title, subtitle, onClose, wide, children }: { title: string; subtitle: string; onClose: () => void; wide?: boolean; children: React.ReactNode }) {
-  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className={`modal ${wide ? 'wide' : ''}`}><header><div><h2>{title}</h2><p>{subtitle}</p></div><button onClick={onClose}><X size={17} /></button></header>{children}</div></div>
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return <label className="field"><span>{label}</span>{children}</label>
-}
-
-function ModalActions({ saving, onClose, action }: { saving: boolean; onClose: () => void; action: string }) {
-  return <div className="modal-actions"><button type="button" className="ghost-button" onClick={onClose}>取消</button><button className="primary-button" disabled={saving}>{saving ? '处理中…' : action}</button></div>
-}
-
 function LoadingScreen() {
-  return <div className="loading-screen"><div className="brand-mark"><Box size={18} /></div><span>Loading Artifact Hub…</span></div>
-}
-
-function relativeTime(iso: string) {
-  const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000)
-  if (seconds < 60) return '刚刚'
-  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`
-  if (seconds < 86400 * 30) return `${Math.floor(seconds / 86400)} 天前`
-  return new Date(iso).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
-}
-
-function formatBytes(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 ** 2).toFixed(1)} MB`
+  return <div className="loading-screen"><div className="loading-orbit"><div className="brand-mark"><Box size={18} /></div><i /><i /></div><strong>Artifact Hub</strong><span>Opening your permanent library…</span></div>
 }
 
 export default App

@@ -50,6 +50,7 @@ func New(db *pgxpool.Pool, options Options) http.Handler {
 	mux.HandleFunc("GET /api/artifacts/{artifactID}", s.getArtifact)
 	mux.HandleFunc("GET /api/artifacts/{artifactID}/content", s.getArtifactContent)
 	mux.HandleFunc("DELETE /api/artifacts/{artifactID}", s.deleteArtifact)
+	mux.HandleFunc("GET /a/{artifactID}/{slug}", s.getArtifactContent)
 	mux.HandleFunc("GET /a/{artifactID}", s.getArtifactContent)
 	mux.HandleFunc("/", s.frontend)
 	return requestLogger(securityHeaders(mux))
@@ -284,15 +285,30 @@ func (s *Server) getArtifactContent(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
+	etag := `"sha256-` + hash + `"`
 	w.Header().Set("Content-Type", mediaType+"; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", safeFilename(filename)))
-	w.Header().Set("ETag", `"sha256-`+hash+`"`)
+	w.Header().Set("ETag", etag)
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	if strings.HasPrefix(mediaType, "text/html") {
 		w.Header().Set("Content-Security-Policy", "sandbox allow-scripts allow-forms; default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline' https:; font-src data: https:; script-src 'unsafe-inline' https:; connect-src 'none'; frame-src 'none'")
 	}
+	if matchesETag(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(content)
+}
+
+func matchesETag(header, etag string) bool {
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "*" || candidate == etag || strings.TrimPrefix(candidate, "W/") == etag {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) deleteArtifact(w http.ResponseWriter, r *http.Request) {
