@@ -62,7 +62,7 @@ func (s *Server) addURLs(r *http.Request, artifact *Artifact) {
 		base = scheme + "://" + r.Host
 	}
 	artifact.ContentURL = fmt.Sprintf("%s/api/artifacts/%s/content", base, artifact.ID)
-	artifact.PublicURL = fmt.Sprintf("%s/a/%s", base, artifact.ID)
+	artifact.PublicURL = fmt.Sprintf("%s/a/%s/%s", base, artifact.ID, artifact.Slug)
 }
 
 func requestLogger(next http.Handler) http.Handler {

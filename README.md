@@ -471,7 +471,8 @@ npm --prefix frontend run dev
 | `GET` | `/api/artifacts/{id}` | 获取完整元数据 |
 | `GET` | `/api/artifacts/{id}/content` | 获取原始内容 |
 | `DELETE` | `/api/artifacts/{id}` | 删除 artifact |
-| `GET` | `/a/{id}` | 稳定的公开内容地址 |
+| `GET` | `/a/{id}/{slug}` | 新生成的可读稳定公开地址 |
+| `GET` | `/a/{id}` | 向后兼容的稳定公开地址 |
 
 上传接口还接受 `title`、`description`、逗号分隔的 `tags`，以及 JSON object 格式的 `metadata`。
 

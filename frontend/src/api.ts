@@ -18,11 +18,11 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     }),
-  artifacts: (collectionId: string, query = '') =>
-    request<Artifact[]>(`/api/collections/${collectionId}/artifacts?q=${encodeURIComponent(query)}`),
+  artifacts: (collectionId: string, query = '', signal?: AbortSignal) =>
+    request<Artifact[]>(`/api/collections/${collectionId}/artifacts?q=${encodeURIComponent(query)}`, { signal }),
   artifact: (artifactId: string) => request<Artifact>(`/api/artifacts/${artifactId}`),
-  artifactContent: async (artifactId: string) => {
-    const response = await fetch(`/api/artifacts/${artifactId}/content`)
+  artifactContent: async (artifactId: string, signal?: AbortSignal) => {
+    const response = await fetch(`/api/artifacts/${artifactId}/content`, { signal })
     if (!response.ok) throw new Error('无法读取 artifact 内容')
     return response.text()
   },
