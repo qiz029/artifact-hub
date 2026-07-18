@@ -7,7 +7,7 @@ Artifact Hub 是一个可自托管的 HTML、Markdown、JSON、JSONL 与 CSV art
 - **Immutable**：API 不提供 update 路由，Postgres trigger 也会拒绝任何 `UPDATE artifacts`。
 - **可删除**：删除 artifact 会同时删除内容和元数据。
 - **完整元数据**：记录 title、description、tags、自定义 JSON、SHA-256、文件大小、原始文件名和 MIME type。
-- **适合阅读的独立页**：Markdown 的公开地址会渲染为带完整排版的阅读页，支持 GFM、Mermaid 图、KaTeX 公式、代码块复制，以及保存在当前设备上的字体、字号和行距设置；JSON 会格式化并高亮显示，JSONL 会按 record 编号展示，CSV 会生成带粘性表头和行号的数据表。内嵌内容不会执行。HTML artifact 仍在 sandboxed iframe 中原样展示，独立地址也带 CSP sandbox。
+- **适合阅读的独立页**：Markdown 的公开地址会渲染为带完整排版的阅读页，支持 GFM、Mermaid 图、KaTeX 公式、代码块复制，以及保存在当前设备上的字体、字号和行距设置；JSON 会格式化、高亮并允许逐层折叠对象和数组，JSONL 会按 record 编号展示，CSV 会生成支持横行与纵列 hover 高亮的数据表，滚动时固定表头、行号和第一列数据。内嵌内容不会执行。HTML artifact 仍在 sandboxed iframe 中原样展示，独立地址也带 CSP sandbox。
 - **单文件限制**：支持 `.html`、`.htm`、`.md`、`.markdown`、`.json`、`.jsonl`、`.csv`，最大 10 MB；JSON/JSONL/CSV 上传时会校验格式，JSONL 与 CSV 必须使用 UTF-8 编码。
 
 > [!WARNING]

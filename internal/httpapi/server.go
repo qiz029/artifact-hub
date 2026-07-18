@@ -408,7 +408,7 @@ func setArtifactRepresentationHeaders(w http.ResponseWriter, mediaType, filename
 }
 
 func structuredPageETag(hash, mediaType, title, filename string) string {
-	digest := sha256.Sum256([]byte("structured-page-v1:" + mediaType + ":" + hash + ":" + title + ":" + filename))
+	digest := sha256.Sum256([]byte("structured-page-v2:" + mediaType + ":" + hash + ":" + title + ":" + filename))
 	return `"sha256-` + hex.EncodeToString(digest[:]) + `"`
 }
 

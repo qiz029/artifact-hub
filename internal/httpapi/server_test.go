@@ -267,6 +267,7 @@ func TestWriteArtifactContentRendersJSONPublicPage(t *testing.T) {
 		"Evaluation results", "results.json", "JSON", "5 top-level fields",
 		`class="json-key"`, `class="json-string"`, `class="json-number"`,
 		`class="json-boolean"`, `class="json-null"`, `class="code-line"`,
+		`class="json-node" open`, `<summary title="Collapse or expand this JSON node">`,
 		"&lt;script&gt;alert(1)&lt;/script&gt;",
 	} {
 		if !strings.Contains(body, fragment) {
@@ -303,7 +304,9 @@ func TestWriteArtifactContentRendersCSVPublicPage(t *testing.T) {
 		"Evaluation trials", "trials.csv", "CSV", "2 data rows · 3 columns",
 		`class="csv-table"`, `<th scope="col">status</th>`, `<td>Todd</td>`,
 		`<th class="row-number" scope="row">2</th>`, "&lt;script&gt;alert(1)&lt;/script&gt;",
-		"max-height: min(72vh, 900px)",
+		"max-height: min(72vh, 900px)", `class="csv-column-highlight-rules"`,
+		`.csv-table:has(tr > :nth-child(2):hover) tr > :nth-child(2)`,
+		`.csv-table thead th:nth-child(2), .csv-table tbody td:first-child { position: sticky; left: 54px;`,
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Errorf("rendered CSV page missing %q", fragment)
@@ -311,6 +314,28 @@ func TestWriteArtifactContentRendersCSVPublicPage(t *testing.T) {
 	}
 	if strings.Contains(body, "<script>alert(1)</script>") {
 		t.Fatal("rendered CSV page included executable artifact content")
+	}
+}
+
+func TestWriteArtifactContentMakesNestedJSONNodesIndependentlyCollapsible(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest(http.MethodGet, "/a/11111111-1111-1111-1111-111111111111/nested", nil)
+	recorder := httptest.NewRecorder()
+
+	writeArtifactContent(recorder, req, artifactContent{
+		content:   []byte(`{"agent":{"steps":[{"status":"ready"}]}}`),
+		mediaType: "application/json",
+		filename:  "nested.json",
+		title:     "Nested JSON",
+		hash:      "nested123",
+	})
+
+	body := recorder.Body.String()
+	if got := strings.Count(body, `<details class="json-node" open>`); got != 4 {
+		t.Fatalf("collapsible JSON nodes = %d, want root object, nested object, array, and array object", got)
+	}
+	if got := strings.Count(body, `</div></details>`); got != 4 {
+		t.Fatalf("closed JSON node wrappers = %d, want 4", got)
 	}
 }
 

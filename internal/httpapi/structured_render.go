@@ -74,23 +74,51 @@ func renderJSONPage(content []byte, title, filename string) ([]byte, error) {
 		body.WriteString(template.HTMLEscapeString(notice))
 		body.WriteString(`</p>`)
 	}
-	body.WriteString(`<pre class="json-view" aria-label="JSON content"><code>`)
-	for index, line := range lines {
-		body.WriteString(`<span class="code-line"><span class="line-number" aria-hidden="true">`)
-		fmt.Fprintf(&body, "%d", index+1)
-		body.WriteString(`</span><span class="line-content">`)
-		if highlight {
-			body.WriteString(highlightJSONLine(line))
-		} else {
-			body.WriteString(template.HTMLEscapeString(line))
-		}
-		body.WriteString("</span></span>")
-	}
-	body.WriteString(`</code></pre></section>`)
+	body.WriteString(`<div class="json-view" role="region" aria-label="JSON content"><div class="json-code">`)
+	body.WriteString(renderCollapsibleJSONLines(lines, highlight))
+	body.WriteString(`</div></div></section>`)
 
 	return renderStructuredPage(structuredPageData{
 		Title: title, Filename: filename, Kind: "JSON", Summary: summary, Content: template.HTML(body.String()),
 	})
+}
+
+func renderCollapsibleJSONLines(lines []string, highlight bool) string {
+	var rendered strings.Builder
+	openNodes := 0
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		isOpeningNode := strings.HasSuffix(trimmed, "{") || strings.HasSuffix(trimmed, "[")
+		isClosingNode := strings.HasPrefix(trimmed, "}") || strings.HasPrefix(trimmed, "]")
+		if isOpeningNode {
+			rendered.WriteString(`<details class="json-node" open><summary title="Collapse or expand this JSON node">`)
+		}
+		rendered.WriteString(`<span class="code-line"><span class="line-number" aria-hidden="true">`)
+		fmt.Fprintf(&rendered, "%d", index+1)
+		rendered.WriteString(`</span><span class="line-content">`)
+		if isOpeningNode {
+			rendered.WriteString(`<span class="json-fold-marker" aria-hidden="true">▾</span>`)
+		}
+		if highlight {
+			rendered.WriteString(highlightJSONLine(line))
+		} else {
+			rendered.WriteString(template.HTMLEscapeString(line))
+		}
+		rendered.WriteString(`</span></span>`)
+		if isOpeningNode {
+			rendered.WriteString(`</summary><div class="json-node-children">`)
+			openNodes++
+		}
+		if isClosingNode && openNodes > 0 {
+			rendered.WriteString(`</div></details>`)
+			openNodes--
+		}
+	}
+	for openNodes > 0 {
+		rendered.WriteString(`</div></details>`)
+		openNodes--
+	}
+	return rendered.String()
 }
 
 func boundedJSONLines(content []byte) ([]string, bool) {
@@ -296,10 +324,11 @@ func renderCSVPage(content []byte, title, filename string) ([]byte, error) {
 
 	var table bytes.Buffer
 	if err := csvTableTmpl.Execute(&table, struct {
-		Headings []string
-		Rows     [][]string
-		Notice   string
-	}{Headings: headings, Rows: rows, Notice: notice}); err != nil {
+		Headings           []string
+		Rows               [][]string
+		Notice             string
+		ColumnHighlightCSS template.CSS
+	}{Headings: headings, Rows: rows, Notice: notice, ColumnHighlightCSS: csvColumnHighlightCSS(previewColumns)}); err != nil {
 		return nil, fmt.Errorf("render CSV table: %w", err)
 	}
 
@@ -308,6 +337,16 @@ func renderCSVPage(content []byte, title, filename string) ([]byte, error) {
 		Summary: fmt.Sprintf("%d data rows · %d columns", totalRows, columnCount),
 		Content: template.HTML(table.String()),
 	})
+}
+
+func csvColumnHighlightCSS(columnCount int) template.CSS {
+	var styles strings.Builder
+	for columnIndex := 0; columnIndex < columnCount; columnIndex++ {
+		childIndex := columnIndex + 2 // Account for the leading row-number column.
+		fmt.Fprintf(&styles, ".csv-table:has(tr > :nth-child(%d):hover) tr > :nth-child(%d) { background: #e8e3fb; }\n", childIndex, childIndex)
+		fmt.Fprintf(&styles, ".csv-table tr > :nth-child(%d):hover { background: #d5ccf8; }\n", childIndex)
+	}
+	return template.CSS(styles.String())
 }
 
 func previewCSVValue(value string, remainingBytes *int, alreadyClipped bool) (string, bool) {
@@ -415,7 +454,15 @@ const structuredPageHTML = `<!doctype html>
     .card-bar { height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 15px; color: #8d8990; background: #191a20; border-bottom: 1px solid rgba(255,255,255,.08); font: 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; letter-spacing: .08em; }
     .card-bar strong { color: #656873; font-weight: 500; }
     .json-view { max-height: min(72vh, 900px); margin: 0; overflow: auto; color: #d9dae0; background: #111217; font: 13px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; }
-    .json-view code { display: block; min-width: max-content; padding: 15px 0 20px; }
+    .json-view .json-code { display: block; min-width: max-content; padding: 15px 0 20px; }
+    .json-node { min-width: max-content; }
+    .json-node > summary { display: block; cursor: pointer; list-style: none; }
+    .json-node > summary::-webkit-details-marker { display: none; }
+    .json-node > summary:hover { background: rgba(111,93,230,.09); }
+    .json-node > summary:focus-visible { outline: 2px solid #8d82f5; outline-offset: -2px; }
+    .json-node:not([open]) > summary { color: #aeb0ba; background: rgba(111,93,230,.075); }
+    .json-fold-marker { display: inline-block; width: 17px; margin-left: -17px; color: #7772b9; transform-origin: 45% 50%; transition: transform .12s ease; }
+    .json-node:not([open]) > summary .json-fold-marker { transform: rotate(-90deg); }
     .code-line { display: grid; grid-template-columns: 58px minmax(max-content, 1fr); min-height: 22px; padding-right: 24px; }
     .code-line:hover { background: rgba(255,255,255,.035); }
     .line-number { padding-right: 17px; color: #4f515a; border-right: 1px solid rgba(255,255,255,.055); text-align: right; user-select: none; }
@@ -442,7 +489,11 @@ const structuredPageHTML = `<!doctype html>
     .csv-table tbody tr:nth-child(even) td, .csv-table tbody tr:nth-child(even) th { background: #faf9f6; }
     .csv-table tbody tr:hover td, .csv-table tbody tr:hover th { background: #f3f1fb; }
     .csv-table .row-number { position: sticky; left: 0; z-index: 1; width: 54px; min-width: 54px; color: #99959c; background: #f7f6f2; border-right-color: #dedbd3; font-weight: 500; text-align: right; user-select: none; }
-    .csv-table thead .row-number { z-index: 3; color: #777181; background: #e7e4f1; }
+    .csv-table thead .row-number { z-index: 4; color: #777181; background: #e7e4f1; }
+    .csv-table thead th:nth-child(2), .csv-table tbody td:first-child { position: sticky; left: 54px; z-index: 2; background: #fff; box-shadow: 8px 0 14px -12px rgba(41,37,55,.75); }
+    .csv-table thead th:nth-child(2) { z-index: 3; background: #efedf8; }
+    .csv-table tbody tr:nth-child(even) td:first-child { background: #faf9f6; }
+    .csv-table tbody tr:hover td:first-child { background: #f3f1fb; }
     .page-footer { margin-top: 22px; color: #8b867c; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; text-align: center; text-transform: uppercase; letter-spacing: .09em; }
     @media (max-width: 700px) {
       .page-shell { width: 100%; padding: 0; }
@@ -476,6 +527,7 @@ const structuredPageHTML = `<!doctype html>
 const csvTableHTML = `<section class="data-card csv-card">
   <header class="card-bar"><span>Tabular preview</span><strong>First row used as headings</strong></header>
   {{if .Notice}}<p class="preview-note">{{.Notice}}</p>{{end}}
+  <style class="csv-column-highlight-rules">{{.ColumnHighlightCSS}}</style>
   <div class="table-scroll">
     <table class="csv-table">
       <thead><tr><th class="row-number" scope="col">#</th>{{range .Headings}}<th scope="col">{{.}}</th>{{end}}</tr></thead>
