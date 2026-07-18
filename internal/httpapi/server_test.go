@@ -22,6 +22,7 @@ func TestArtifactFormat(t *testing.T) {
 		{"notes.MD", "markdown", "text/markdown", false},
 		{"results.json", "json", "application/json", false},
 		{"trials.CSV", "csv", "text/csv", false},
+		{"events.JSONL", "jsonl", "application/x-ndjson", false},
 		{"image.svg", "", "", true},
 	}
 	for _, test := range tests {
@@ -32,6 +33,9 @@ func TestArtifactFormat(t *testing.T) {
 			}
 			if test.wantType == "csv" {
 				content = []byte("status,owner\nready,Todd\n")
+			}
+			if test.wantType == "jsonl" {
+				content = []byte("{\"id\":1}\n{\"id\":2}\n")
 			}
 			gotType, gotMedia, err := artifactFormat(test.filename, content)
 			if (err != nil) != test.wantErr || gotType != test.wantType || gotMedia != test.wantMedia {
@@ -48,6 +52,8 @@ func TestArtifactFormatRejectsMalformedStructuredData(t *testing.T) {
 		content  string
 	}{
 		{filename: "broken.json", content: `{"missing":`},
+		{filename: "broken.jsonl", content: "{\"id\":1}\n{\"missing\":\n"},
+		{filename: "blank-line.jsonl", content: "{\"id\":1}\n\n{\"id\":2}\n"},
 		{filename: "broken.csv", content: "name,notes\nTodd,\"unterminated\n"},
 		{filename: "ragged.csv", content: "name,status\nTodd\nCasey,ready,extra\n"},
 		{filename: "blank.csv", content: "\n"},
@@ -62,11 +68,13 @@ func TestArtifactFormatRejectsMalformedStructuredData(t *testing.T) {
 	}
 }
 
-func TestArtifactFormatRejectsInvalidUTF8JSON(t *testing.T) {
+func TestArtifactFormatRejectsInvalidUTF8StructuredJSON(t *testing.T) {
 	t.Parallel()
 	content := []byte{'{', '"', 'v', 'a', 'l', 'u', 'e', '"', ':', '"', 0xff, '"', '}'}
-	if _, _, err := artifactFormat("invalid.json", content); err == nil {
-		t.Fatal("artifactFormat() accepted JSON containing invalid UTF-8")
+	for _, filename := range []string{"invalid.json", "invalid.jsonl"} {
+		if _, _, err := artifactFormat(filename, content); err == nil {
+			t.Fatalf("artifactFormat() accepted %s containing invalid UTF-8", filename)
+		}
 	}
 }
 
@@ -353,6 +361,40 @@ func TestWriteArtifactContentLimitsLargeJSONPreview(t *testing.T) {
 	}
 }
 
+func TestWriteArtifactContentRendersJSONLPublicPage(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest(http.MethodGet, "/a/11111111-1111-1111-1111-111111111111/events", nil)
+	recorder := httptest.NewRecorder()
+	writeArtifactContent(recorder, req, artifactContent{
+		content:   []byte("{\"event\":\"build\",\"passed\":true}\n[1,2,3]\n\"<script>alert(1)</script>\"\n"),
+		mediaType: "application/x-ndjson",
+		filename:  "events.jsonl",
+		title:     "Agent events",
+		hash:      "jsonl123",
+	})
+
+	response := recorder.Result()
+	if got := response.Header.Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Fatalf("Content-Type = %q, want rendered HTML", got)
+	}
+	if got := response.Header.Get("Content-Disposition"); !strings.Contains(got, `filename="events.html"`) {
+		t.Fatalf("Content-Disposition = %q, want rendered HTML filename", got)
+	}
+	body := recorder.Body.String()
+	for _, fragment := range []string{
+		"Agent events", "events.jsonl", "JSONL", "3 records",
+		`class="jsonl-record"`, "Record 1", "object", "Record 2", "array", "Record 3", "string",
+		`class="json-key"`, `class="json-boolean"`, "&lt;script&gt;alert(1)&lt;/script&gt;",
+	} {
+		if !strings.Contains(body, fragment) {
+			t.Errorf("rendered JSONL page missing %q", fragment)
+		}
+	}
+	if strings.Contains(body, "<script>alert(1)</script>") {
+		t.Fatal("rendered JSONL page included executable artifact content")
+	}
+}
+
 func TestWriteArtifactContentKeepsStructuredAPIRaw(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -361,6 +403,7 @@ func TestWriteArtifactContentKeepsStructuredAPIRaw(t *testing.T) {
 		content   string
 	}{
 		{name: "JSON", mediaType: "application/json", content: `{"status":"ready"}`},
+		{name: "JSONL", mediaType: "application/x-ndjson", content: "{\"id\":1}\n{\"id\":2}\n"},
 		{name: "CSV", mediaType: "text/csv", content: "status,owner\nready,Todd\n"},
 	}
 	for _, test := range tests {
@@ -378,6 +421,28 @@ func TestWriteArtifactContentKeepsStructuredAPIRaw(t *testing.T) {
 				t.Fatalf("API body changed: %q", got)
 			}
 		})
+	}
+}
+
+func TestWriteArtifactContentLimitsJSONLPreview(t *testing.T) {
+	t.Parallel()
+	var content strings.Builder
+	for index := 1; index <= maxJSONLPreviewRecords+2; index++ {
+		fmt.Fprintf(&content, "{\"id\":%d}\n", index)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/a/11111111-1111-1111-1111-111111111111/events", nil)
+	recorder := httptest.NewRecorder()
+	writeArtifactContent(recorder, req, artifactContent{
+		content: []byte(content.String()), mediaType: "application/x-ndjson", filename: "events.jsonl", title: "Events", hash: "events123",
+	})
+
+	body := recorder.Body.String()
+	wantNotice := fmt.Sprintf("Showing first %d of %d records", maxJSONLPreviewRecords, maxJSONLPreviewRecords+2)
+	if !strings.Contains(body, wantNotice) {
+		t.Fatalf("rendered JSONL page missing preview notice %q", wantNotice)
+	}
+	if strings.Contains(body, fmt.Sprintf("Record %d", maxJSONLPreviewRecords+1)) {
+		t.Fatal("rendered JSONL page included records beyond the preview limit")
 	}
 }
 

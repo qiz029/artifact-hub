@@ -14,6 +14,7 @@ import {
   FolderPlus,
   Info,
   Layers3,
+  ListTree,
   LockKeyhole,
   Maximize2,
   MoreHorizontal,
@@ -45,6 +46,7 @@ function artifactTypeLabel(type: Artifact['type'], long = false) {
 function ArtifactTypeIcon({ type, size = 15 }: { type: Artifact['type']; size?: number }) {
   if (type === 'html') return <FileCode2 size={size} />
   if (type === 'json') return <Braces size={size} />
+  if (type === 'jsonl') return <ListTree size={size} />
   if (type === 'csv') return <Table2 size={size} />
   return <FileText size={size} />
 }
@@ -316,7 +318,7 @@ function App() {
                   <div className="empty-list">
                     <UploadCloud size={22} />
                     <strong>{artifactQuery ? '没有匹配结果' : '这里还没有 Artifact'}</strong>
-                    <span>{artifactQuery ? '试试其他关键词' : '发布 HTML、Markdown、JSON 或 CSV，获得一个稳定地址'}</span>
+                    <span>{artifactQuery ? '试试其他关键词' : '发布 HTML、Markdown、JSON、JSONL 或 CSV，获得一个稳定地址'}</span>
                     {!artifactQuery && selectedCollection && <button onClick={() => setModal('artifact')}>发布第一个</button>}
                   </div>
                 )}

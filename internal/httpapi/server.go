@@ -353,6 +353,23 @@ func writeArtifactContent(w http.ResponseWriter, r *http.Request, artifact artif
 			return
 		}
 		content = page
+	} else if strings.HasPrefix(r.URL.Path, "/a/") && strings.HasPrefix(mediaType, "application/x-ndjson") {
+		etag = structuredPageETag(artifact.hash, artifact.mediaType, artifact.title, artifact.filename)
+		mediaType = "text/html"
+		responseFilename = renderedHTMLFilename(artifact.filename)
+		cacheControl = "no-cache"
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
+		if matchesETag(r.Header.Get("If-None-Match"), etag) {
+			setArtifactRepresentationHeaders(w, mediaType, responseFilename, etag, cacheControl)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		page, err := renderJSONLPage(content, artifact.title, safeFilename(artifact.filename))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to render JSONL page")
+			return
+		}
+		content = page
 	} else if strings.HasPrefix(r.URL.Path, "/a/") && strings.HasPrefix(mediaType, "text/csv") {
 		etag = structuredPageETag(artifact.hash, artifact.mediaType, artifact.title, artifact.filename)
 		mediaType = "text/html"
@@ -646,6 +663,11 @@ func artifactFormat(filename string, content []byte) (string, string, error) {
 			return "", "", fmt.Errorf("JSON artifact must contain valid JSON")
 		}
 		return "json", "application/json", nil
+	case ".jsonl":
+		if err := validateJSONLines(content); err != nil {
+			return "", "", err
+		}
+		return "jsonl", "application/x-ndjson", nil
 	case ".csv":
 		if !utf8.Valid(content) {
 			return "", "", fmt.Errorf("CSV artifact must be UTF-8 encoded")
@@ -666,8 +688,39 @@ func artifactFormat(filename string, content []byte) (string, string, error) {
 		}
 		return "csv", "text/csv", nil
 	default:
-		return "", "", fmt.Errorf("only HTML, Markdown, JSON, and CSV files are supported")
+		return "", "", fmt.Errorf("only HTML, Markdown, JSON, JSONL, and CSV files are supported")
 	}
+}
+
+func validateJSONLines(content []byte) error {
+	if !utf8.Valid(content) {
+		return fmt.Errorf("JSONL artifact must be UTF-8 encoded")
+	}
+	recordCount := 0
+	lineNumber := 0
+	for len(content) > 0 {
+		lineNumber++
+		lineEnd := bytes.IndexByte(content, '\n')
+		line := content
+		if lineEnd >= 0 {
+			line = content[:lineEnd]
+			content = content[lineEnd+1:]
+		} else {
+			content = nil
+		}
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			return fmt.Errorf("JSONL artifact line %d cannot be empty", lineNumber)
+		}
+		if !json.Valid(line) {
+			return fmt.Errorf("JSONL artifact line %d must contain valid JSON", lineNumber)
+		}
+		recordCount++
+	}
+	if recordCount == 0 {
+		return fmt.Errorf("JSONL artifact must contain at least one record")
+	}
+	return nil
 }
 
 func renderedHTMLFilename(filename string) string {

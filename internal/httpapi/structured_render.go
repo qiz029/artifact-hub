@@ -15,6 +15,8 @@ const (
 	maxJSONPrettySourceBytes = 512 << 10
 	maxJSONPreviewBytes      = 512 << 10
 	maxJSONPreviewLines      = 5000
+	maxJSONLPreviewRecords   = 500
+	maxJSONLPreviewBytes     = 512 << 10
 	maxCSVPreviewRows        = 1000
 	maxCSVPreviewColumns     = 100
 	maxCSVPreviewBytes       = 1 << 20
@@ -129,6 +131,120 @@ func jsonSummary(value any) string {
 	default:
 		return "Scalar value"
 	}
+}
+
+func renderJSONLPage(content []byte, title, filename string) ([]byte, error) {
+	remainingBytes := maxJSONLPreviewBytes
+	totalRecords := 0
+	previewRecords := 0
+	contentClipped := false
+	var body strings.Builder
+	body.WriteString(`<section class="data-card jsonl-card"><header class="card-bar"><span>Record stream</span><strong>Line-delimited JSON</strong></header>`)
+	var recordsBody strings.Builder
+	for len(content) > 0 {
+		lineEnd := bytes.IndexByte(content, '\n')
+		line := content
+		if lineEnd >= 0 {
+			line = content[:lineEnd]
+			content = content[lineEnd+1:]
+		} else {
+			content = nil
+		}
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			return nil, fmt.Errorf("parse JSONL: record %d is empty", totalRecords+1)
+		}
+		totalRecords++
+		if previewRecords >= maxJSONLPreviewRecords || remainingBytes == 0 {
+			continue
+		}
+
+		formatted := line
+		highlight := false
+		if len(line) <= remainingBytes {
+			var pretty bytes.Buffer
+			if err := json.Indent(&pretty, line, "", "  "); err != nil {
+				return nil, fmt.Errorf("format JSONL record %d: %w", totalRecords, err)
+			}
+			formatted = pretty.Bytes()
+			highlight = true
+		}
+		limit := min(len(formatted), remainingBytes)
+		for limit > 0 && !utf8.Valid(formatted[:limit]) {
+			limit--
+		}
+		if limit < len(formatted) {
+			contentClipped = true
+			highlight = false
+		}
+		formatted = formatted[:limit]
+		remainingBytes -= limit
+		previewRecords++
+
+		fmt.Fprintf(&recordsBody, `<article class="jsonl-record"><header><span>Record %d</span><strong>%s</strong></header><pre><code>`, totalRecords, jsonValueKind(line))
+		lines, linesClipped := boundedJSONLines(formatted)
+		if linesClipped {
+			contentClipped = true
+		}
+		for index, recordLine := range lines {
+			recordsBody.WriteString(`<span class="code-line"><span class="line-number" aria-hidden="true">`)
+			fmt.Fprintf(&recordsBody, "%d", index+1)
+			recordsBody.WriteString(`</span><span class="line-content">`)
+			if highlight {
+				recordsBody.WriteString(highlightJSONLine(recordLine))
+			} else {
+				recordsBody.WriteString(template.HTMLEscapeString(recordLine))
+			}
+			recordsBody.WriteString(`</span></span>`)
+		}
+		recordsBody.WriteString(`</code></pre></article>`)
+	}
+
+	notice := jsonlPreviewNotice(totalRecords, previewRecords, contentClipped)
+	if notice != "" {
+		body.WriteString(`<p class="preview-note">`)
+		body.WriteString(template.HTMLEscapeString(notice))
+		body.WriteString(`</p>`)
+	}
+	body.WriteString(`<div class="jsonl-list">`)
+	body.WriteString(recordsBody.String())
+	body.WriteString(`</div></section>`)
+	return renderStructuredPage(structuredPageData{
+		Title: title, Filename: filename, Kind: "JSONL",
+		Summary: fmt.Sprintf("%d records", totalRecords), Content: template.HTML(body.String()),
+	})
+}
+
+func jsonValueKind(content []byte) string {
+	content = bytes.TrimSpace(content)
+	if len(content) == 0 {
+		return "value"
+	}
+	switch content[0] {
+	case '{':
+		return "object"
+	case '[':
+		return "array"
+	case '"':
+		return "string"
+	case 't', 'f':
+		return "boolean"
+	case 'n':
+		return "null"
+	default:
+		return "number"
+	}
+}
+
+func jsonlPreviewNotice(totalRecords, previewRecords int, contentClipped bool) string {
+	parts := make([]string, 0, 2)
+	if previewRecords < totalRecords {
+		parts = append(parts, fmt.Sprintf("Showing first %d of %d records", previewRecords, totalRecords))
+	}
+	if contentClipped {
+		parts = append(parts, "A long record was shortened")
+	}
+	return strings.Join(parts, " · ")
 }
 
 func renderCSVPage(content []byte, title, filename string) ([]byte, error) {
@@ -309,6 +425,15 @@ const structuredPageHTML = `<!doctype html>
     .json-number { color: #e9b982; }
     .json-boolean { color: #c6a7ef; }
     .json-null { color: #7f828d; font-style: italic; }
+    .jsonl-list { display: grid; gap: 12px; padding: 14px; background: #111217; }
+    .jsonl-record { min-width: 0; overflow: hidden; background: #17181e; border: 1px solid rgba(255,255,255,.075); border-radius: 10px; }
+    .jsonl-record > header { height: 36px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 13px; color: #a5a7b0; background: #1d1e25; border-bottom: 1px solid rgba(255,255,255,.065); font: 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; letter-spacing: .07em; }
+    .jsonl-record > header strong { color: #777b87; font-weight: 550; }
+    .jsonl-record pre { max-height: 420px; margin: 0; overflow: auto; color: #d9dae0; background: #111217; font: 12px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .jsonl-record pre code { display: block; min-width: max-content; padding: 11px 0 13px; }
+    .jsonl-record .code-line { grid-template-columns: 44px minmax(max-content, 1fr); min-height: 20px; padding-right: 18px; }
+    .jsonl-record .line-number { padding-right: 12px; }
+    .jsonl-record .line-content { padding-left: 13px; }
     .preview-note { margin: 0; padding: 10px 15px; color: #716c62; background: #fff9e8; border-bottom: 1px solid #ebe4cf; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
     .table-scroll { max-width: 100%; max-height: min(72vh, 900px); overflow: auto; background: #fff; }
     .csv-table { width: 100%; min-width: max-content; border-spacing: 0; border-collapse: separate; color: #32333a; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -327,6 +452,8 @@ const structuredPageHTML = `<!doctype html>
       .summary { margin: 0; }
       .data-card { border-right: 0; border-left: 0; border-radius: 0; box-shadow: none; }
       .json-view { font-size: 12px; }
+      .jsonl-list { gap: 9px; padding: 10px; }
+      .jsonl-record { border-radius: 8px; }
       .code-line { grid-template-columns: 42px minmax(max-content, 1fr); padding-right: 16px; }
       .line-number { padding-right: 11px; }
       .line-content { padding-left: 12px; }
