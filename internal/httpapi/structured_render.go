@@ -150,7 +150,7 @@ func renderJSONLPage(content []byte, title, filename string) ([]byte, error) {
 		} else {
 			content = nil
 		}
-		line = bytes.TrimSpace(line)
+		line = trimJSONWhitespace(line)
 		if len(line) == 0 {
 			return nil, fmt.Errorf("parse JSONL: record %d is empty", totalRecords+1)
 		}
@@ -216,7 +216,7 @@ func renderJSONLPage(content []byte, title, filename string) ([]byte, error) {
 }
 
 func jsonValueKind(content []byte) string {
-	content = bytes.TrimSpace(content)
+	content = trimJSONWhitespace(content)
 	if len(content) == 0 {
 		return "value"
 	}

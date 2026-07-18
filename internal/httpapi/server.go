@@ -708,8 +708,7 @@ func validateJSONLines(content []byte) error {
 		} else {
 			content = nil
 		}
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
+		if len(trimJSONWhitespace(line)) == 0 {
 			return fmt.Errorf("JSONL artifact line %d cannot be empty", lineNumber)
 		}
 		if !json.Valid(line) {
@@ -721,6 +720,10 @@ func validateJSONLines(content []byte) error {
 		return fmt.Errorf("JSONL artifact must contain at least one record")
 	}
 	return nil
+}
+
+func trimJSONWhitespace(content []byte) []byte {
+	return bytes.Trim(content, " \t\r\n")
 }
 
 func renderedHTMLFilename(filename string) string {

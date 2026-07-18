@@ -54,6 +54,7 @@ func TestArtifactFormatRejectsMalformedStructuredData(t *testing.T) {
 		{filename: "broken.json", content: `{"missing":`},
 		{filename: "broken.jsonl", content: "{\"id\":1}\n{\"missing\":\n"},
 		{filename: "blank-line.jsonl", content: "{\"id\":1}\n\n{\"id\":2}\n"},
+		{filename: "non-json-whitespace.jsonl", content: "\u00a0{\"id\":1}\n"},
 		{filename: "broken.csv", content: "name,notes\nTodd,\"unterminated\n"},
 		{filename: "ragged.csv", content: "name,status\nTodd\nCasey,ready,extra\n"},
 		{filename: "blank.csv", content: "\n"},
