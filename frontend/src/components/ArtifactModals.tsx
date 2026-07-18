@@ -1,12 +1,29 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Check, ChevronDown, FileCode2, FileText, LockKeyhole, Trash2, UploadCloud, X } from 'lucide-react'
+import { AlertTriangle, Braces, Check, ChevronDown, FileCode2, FileText, ListTree, LockKeyhole, Table2, Trash2, UploadCloud, X } from 'lucide-react'
 import { api } from '../api'
 import type { Artifact, Collection } from '../types'
 import { formatBytes } from '../lib/format'
 
 const colors = ['#7C6DF2', '#35B786', '#E49B52', '#E45C66', '#45A5DE']
 const maxArtifactSize = 10 * 1024 * 1024
-const supportedArtifact = /\.(html?|md|markdown)$/i
+const supportedArtifact = /\.(html?|md|markdown|json|jsonl|csv)$/i
+
+function fileKind(filename: string) {
+  if (/\.html?$/i.test(filename)) return 'html'
+  if (/\.jsonl$/i.test(filename)) return 'jsonl'
+  if (/\.json$/i.test(filename)) return 'json'
+  if (/\.csv$/i.test(filename)) return 'csv'
+  return 'markdown'
+}
+
+function UploadFileIcon({ filename }: { filename: string }) {
+  const kind = fileKind(filename)
+  if (kind === 'html') return <FileCode2 size={20} />
+  if (kind === 'json') return <Braces size={20} />
+  if (kind === 'jsonl') return <ListTree size={20} />
+  if (kind === 'csv') return <Table2 size={20} />
+  return <FileText size={20} />
+}
 
 export function CollectionModal({ onClose, onCreated }: { onClose: () => void; onCreated: (collection: Collection) => void }) {
   const [name, setName] = useState('')
@@ -49,7 +66,7 @@ export function ArtifactModal({ collection, onClose, onCreated }: { collection: 
   const pickFile = (next: File | null) => {
     if (!next) return
     if (!supportedArtifact.test(next.name)) {
-      setError('仅支持 HTML 与 Markdown 文件')
+      setError('仅支持 HTML、Markdown、JSON、JSONL 与 CSV 文件')
       return
     }
     if (next.size > maxArtifactSize) {
@@ -58,7 +75,7 @@ export function ArtifactModal({ collection, onClose, onCreated }: { collection: 
     }
     setError('')
     setFile(next)
-    if (!title) setTitle(next.name.replace(/\.(html?|md|markdown)$/i, ''))
+    if (!title) setTitle(next.name.replace(/\.(html?|md|markdown|json|jsonl|csv)$/i, ''))
   }
 
   const submit = async (event: React.FormEvent) => {
@@ -79,9 +96,9 @@ export function ArtifactModal({ collection, onClose, onCreated }: { collection: 
   return (
     <ModalFrame title="发布 Artifact" subtitle={`发布到 ${collection.name}。内容与元数据将生成永久指纹。`} onClose={onClose} wide>
       <form onSubmit={submit}>
-        <input ref={inputRef} className="visually-hidden" type="file" accept=".html,.htm,.md,.markdown,text/html,text/markdown" onChange={(event) => pickFile(event.target.files?.[0] ?? null)} />
+        <input ref={inputRef} className="visually-hidden" type="file" accept=".html,.htm,.md,.markdown,.json,.jsonl,.csv,text/html,text/markdown,application/json,application/x-ndjson,text/csv" onChange={(event) => pickFile(event.target.files?.[0] ?? null)} />
         <button type="button" className={`drop-zone ${file ? 'has-file' : ''} ${dragging ? 'is-dragging' : ''}`} onClick={() => inputRef.current?.click()} onDragEnter={(event) => { event.preventDefault(); setDragging(true) }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); pickFile(event.dataTransfer.files[0] ?? null) }}>
-          {file ? <><span className={`upload-file-icon ${file.name.match(/\.html?$/i) ? 'html' : 'markdown'}`}>{file.name.match(/\.html?$/i) ? <FileCode2 size={20} /> : <FileText size={20} />}</span><div><strong>{file.name}</strong><span>{formatBytes(file.size)} · 点击更换</span></div><Check size={18} className="upload-check" /></> : <><UploadCloud size={24} /><strong>拖入 HTML 或 Markdown 文件</strong><span>或点击浏览 · 最大 10 MB</span></>}
+          {file ? <><span className={`upload-file-icon ${fileKind(file.name)}`}><UploadFileIcon filename={file.name} /></span><div><strong>{file.name}</strong><span>{formatBytes(file.size)} · 点击更换</span></div><Check size={18} className="upload-check" /></> : <><UploadCloud size={24} /><strong>拖入 HTML、Markdown、JSON、JSONL 或 CSV</strong><span>或点击浏览 · 最大 10 MB</span></>}
         </button>
         <div className="form-grid">
           <Field label="标题"><input required maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Artifact 标题" /></Field>

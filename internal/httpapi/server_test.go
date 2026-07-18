@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,21 +13,69 @@ import (
 func TestArtifactFormat(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		filename string
-		wantType string
-		wantErr  bool
+		filename  string
+		wantType  string
+		wantMedia string
+		wantErr   bool
 	}{
-		{"report.html", "html", false},
-		{"notes.MD", "markdown", false},
-		{"image.svg", "", true},
+		{"report.html", "html", "text/html", false},
+		{"notes.MD", "markdown", "text/markdown", false},
+		{"results.json", "json", "application/json", false},
+		{"trials.CSV", "csv", "text/csv", false},
+		{"events.JSONL", "jsonl", "application/x-ndjson", false},
+		{"image.svg", "", "", true},
 	}
 	for _, test := range tests {
 		t.Run(test.filename, func(t *testing.T) {
-			got, _, err := artifactFormat(test.filename, []byte("content"))
-			if (err != nil) != test.wantErr || got != test.wantType {
-				t.Fatalf("artifactFormat() = %q, %v", got, err)
+			content := []byte("content")
+			if test.wantType == "json" {
+				content = []byte(`{"status":"ready"}`)
+			}
+			if test.wantType == "csv" {
+				content = []byte("status,owner\nready,Todd\n")
+			}
+			if test.wantType == "jsonl" {
+				content = []byte("{\"id\":1}\n{\"id\":2}\n")
+			}
+			gotType, gotMedia, err := artifactFormat(test.filename, content)
+			if (err != nil) != test.wantErr || gotType != test.wantType || gotMedia != test.wantMedia {
+				t.Fatalf("artifactFormat() = %q, %q, %v", gotType, gotMedia, err)
 			}
 		})
+	}
+}
+
+func TestArtifactFormatRejectsMalformedStructuredData(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		filename string
+		content  string
+	}{
+		{filename: "broken.json", content: `{"missing":`},
+		{filename: "broken.jsonl", content: "{\"id\":1}\n{\"missing\":\n"},
+		{filename: "blank-line.jsonl", content: "{\"id\":1}\n\n{\"id\":2}\n"},
+		{filename: "non-json-whitespace.jsonl", content: "\u00a0{\"id\":1}\n"},
+		{filename: "broken.csv", content: "name,notes\nTodd,\"unterminated\n"},
+		{filename: "ragged.csv", content: "name,status\nTodd\nCasey,ready,extra\n"},
+		{filename: "blank.csv", content: "\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.filename, func(t *testing.T) {
+			t.Parallel()
+			if _, _, err := artifactFormat(test.filename, []byte(test.content)); err == nil {
+				t.Fatal("artifactFormat() accepted malformed structured data")
+			}
+		})
+	}
+}
+
+func TestArtifactFormatRejectsInvalidUTF8StructuredJSON(t *testing.T) {
+	t.Parallel()
+	content := []byte{'{', '"', 'v', 'a', 'l', 'u', 'e', '"', ':', '"', 0xff, '"', '}'}
+	for _, filename := range []string{"invalid.json", "invalid.jsonl"} {
+		if _, _, err := artifactFormat(filename, content); err == nil {
+			t.Fatalf("artifactFormat() accepted %s containing invalid UTF-8", filename)
+		}
 	}
 }
 
@@ -111,6 +160,9 @@ func TestWriteArtifactContentRendersMarkdownPublicPage(t *testing.T) {
 	if got := response.Header.Get("Content-Type"); got != "text/html; charset=utf-8" {
 		t.Fatalf("Content-Type = %q, want rendered HTML", got)
 	}
+	if got := response.Header.Get("Content-Disposition"); !strings.Contains(got, `filename="release-notes.md"`) {
+		t.Fatalf("Content-Disposition = %q, want existing Markdown filename contract", got)
+	}
 	if got := response.Header.Get("Cache-Control"); got != "no-cache" {
 		t.Fatalf("Cache-Control = %q, want rendered Markdown pages to revalidate", got)
 	}
@@ -187,5 +239,254 @@ func TestWriteArtifactContentKeepsMarkdownAPIRaw(t *testing.T) {
 	}
 	if got := recorder.Body.String(); got != rawMarkdown {
 		t.Fatalf("Markdown API body changed: %q", got)
+	}
+}
+
+func TestWriteArtifactContentRendersJSONPublicPage(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest(http.MethodGet, "/a/11111111-1111-1111-1111-111111111111/results", nil)
+	recorder := httptest.NewRecorder()
+
+	writeArtifactContent(recorder, req, artifactContent{
+		content:   []byte(`{"status":"ready","score":0.98,"passed":true,"details":null,"unsafe":"<script>alert(1)</script>"}`),
+		mediaType: "application/json",
+		filename:  "results.json",
+		title:     "Evaluation results",
+		hash:      "json123",
+	})
+
+	response := recorder.Result()
+	if got := response.Header.Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Fatalf("Content-Type = %q, want rendered HTML", got)
+	}
+	if got := response.Header.Get("Content-Disposition"); !strings.Contains(got, `filename="results.html"`) {
+		t.Fatalf("Content-Disposition = %q, want rendered HTML filename", got)
+	}
+	body := recorder.Body.String()
+	for _, fragment := range []string{
+		"Evaluation results", "results.json", "JSON", "5 top-level fields",
+		`class="json-key"`, `class="json-string"`, `class="json-number"`,
+		`class="json-boolean"`, `class="json-null"`, `class="code-line"`,
+		`class="json-node" open`, `<summary title="Collapse or expand this JSON node">`,
+		"&lt;script&gt;alert(1)&lt;/script&gt;",
+	} {
+		if !strings.Contains(body, fragment) {
+			t.Errorf("rendered JSON page missing %q", fragment)
+		}
+	}
+	if strings.Contains(body, "<script>alert(1)</script>") {
+		t.Fatal("rendered JSON page included executable artifact content")
+	}
+	if csp := response.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'none'") {
+		t.Fatalf("JSON page CSP = %q, want scripts and remote content disabled", csp)
+	}
+}
+
+func TestWriteArtifactContentRendersCSVPublicPage(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest(http.MethodGet, "/a/11111111-1111-1111-1111-111111111111/trials", nil)
+	recorder := httptest.NewRecorder()
+
+	writeArtifactContent(recorder, req, artifactContent{
+		content:   []byte("status,owner,score\nready,Todd,0.98\nfailed,\"<script>alert(1)</script>\",0.42\n"),
+		mediaType: "text/csv",
+		filename:  "trials.csv",
+		title:     "Evaluation trials",
+		hash:      "csv123",
+	})
+
+	response := recorder.Result()
+	if got := response.Header.Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Fatalf("Content-Type = %q, want rendered HTML", got)
+	}
+	body := recorder.Body.String()
+	for _, fragment := range []string{
+		"Evaluation trials", "trials.csv", "CSV", "2 data rows · 3 columns",
+		`class="csv-table"`, `<th scope="col">status</th>`, `<td>Todd</td>`,
+		`<th class="row-number" scope="row">2</th>`, "&lt;script&gt;alert(1)&lt;/script&gt;",
+		"max-height: min(72vh, 900px)", `class="csv-column-highlight-rules"`,
+		`.csv-table:has(tr > :nth-child(2):hover) tr > :nth-child(2)`,
+		`.csv-table thead th:nth-child(2), .csv-table tbody td:nth-child(2) { position: sticky; left: 54px;`,
+	} {
+		if !strings.Contains(body, fragment) {
+			t.Errorf("rendered CSV page missing %q", fragment)
+		}
+	}
+	if strings.Contains(body, "<script>alert(1)</script>") {
+		t.Fatal("rendered CSV page included executable artifact content")
+	}
+}
+
+func TestWriteArtifactContentMakesNestedJSONNodesIndependentlyCollapsible(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest(http.MethodGet, "/a/11111111-1111-1111-1111-111111111111/nested", nil)
+	recorder := httptest.NewRecorder()
+
+	writeArtifactContent(recorder, req, artifactContent{
+		content:   []byte(`{"agent":{"steps":[{"status":"ready"}]}}`),
+		mediaType: "application/json",
+		filename:  "nested.json",
+		title:     "Nested JSON",
+		hash:      "nested123",
+	})
+
+	body := recorder.Body.String()
+	if got := strings.Count(body, `<details class="json-node" open>`); got != 4 {
+		t.Fatalf("collapsible JSON nodes = %d, want root object, nested object, array, and array object", got)
+	}
+	if got := strings.Count(body, `</div></details>`); got != 4 {
+		t.Fatalf("closed JSON node wrappers = %d, want 4", got)
+	}
+}
+
+func TestWriteArtifactContentLimitsCSVPreview(t *testing.T) {
+	t.Parallel()
+	var csvContent strings.Builder
+	csvContent.WriteString("case,status\n")
+	for index := 1; index <= maxCSVPreviewRows+2; index++ {
+		fmt.Fprintf(&csvContent, "case-%04d,ready\n", index)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/a/11111111-1111-1111-1111-111111111111/large", nil)
+	recorder := httptest.NewRecorder()
+	writeArtifactContent(recorder, req, artifactContent{
+		content: []byte(csvContent.String()), mediaType: "text/csv", filename: "large.csv", title: "Large table", hash: "large123",
+	})
+
+	body := recorder.Body.String()
+	wantNotice := fmt.Sprintf("Showing first %d of %d data rows", maxCSVPreviewRows, maxCSVPreviewRows+2)
+	if !strings.Contains(body, wantNotice) {
+		t.Fatalf("rendered CSV page missing preview notice %q", wantNotice)
+	}
+	if strings.Contains(body, fmt.Sprintf("case-%04d", maxCSVPreviewRows+1)) {
+		t.Fatal("rendered CSV page included rows beyond the preview limit")
+	}
+}
+
+func TestWriteArtifactContentLimitsLargeJSONPreview(t *testing.T) {
+	t.Parallel()
+	var jsonContent strings.Builder
+	jsonContent.WriteByte('[')
+	for jsonContent.Len() <= maxJSONPrettySourceBytes {
+		jsonContent.WriteString("0,")
+	}
+	jsonContent.WriteString("0]")
+	req := httptest.NewRequest(http.MethodGet, "/a/11111111-1111-1111-1111-111111111111/large-json", nil)
+	recorder := httptest.NewRecorder()
+	writeArtifactContent(recorder, req, artifactContent{
+		content: []byte(jsonContent.String()), mediaType: "application/json", filename: "large.json", title: "Large JSON", hash: "large-json-123",
+	})
+
+	body := recorder.Body.String()
+	for _, fragment := range []string{"Raw preview", "JSON preview truncated", "Large JSON array"} {
+		if !strings.Contains(body, fragment) {
+			t.Fatalf("rendered large JSON page missing %q", fragment)
+		}
+	}
+	if len(body) > maxJSONPreviewBytes*8 {
+		t.Fatalf("rendered large JSON page is %d bytes, want bounded output", len(body))
+	}
+}
+
+func TestWriteArtifactContentRendersJSONLPublicPage(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest(http.MethodGet, "/a/11111111-1111-1111-1111-111111111111/events", nil)
+	recorder := httptest.NewRecorder()
+	writeArtifactContent(recorder, req, artifactContent{
+		content:   []byte("{\"event\":\"build\",\"passed\":true}\n[1,2,3]\n\"<script>alert(1)</script>\"\n"),
+		mediaType: "application/x-ndjson",
+		filename:  "events.jsonl",
+		title:     "Agent events",
+		hash:      "jsonl123",
+	})
+
+	response := recorder.Result()
+	if got := response.Header.Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Fatalf("Content-Type = %q, want rendered HTML", got)
+	}
+	if got := response.Header.Get("Content-Disposition"); !strings.Contains(got, `filename="events.html"`) {
+		t.Fatalf("Content-Disposition = %q, want rendered HTML filename", got)
+	}
+	body := recorder.Body.String()
+	for _, fragment := range []string{
+		"Agent events", "events.jsonl", "JSONL", "3 records",
+		`class="jsonl-record"`, "Record 1", "object", "Record 2", "array", "Record 3", "string",
+		`class="json-key"`, `class="json-boolean"`, "&lt;script&gt;alert(1)&lt;/script&gt;",
+	} {
+		if !strings.Contains(body, fragment) {
+			t.Errorf("rendered JSONL page missing %q", fragment)
+		}
+	}
+	if strings.Contains(body, "<script>alert(1)</script>") {
+		t.Fatal("rendered JSONL page included executable artifact content")
+	}
+}
+
+func TestWriteArtifactContentKeepsStructuredAPIRaw(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		mediaType string
+		content   string
+	}{
+		{name: "JSON", mediaType: "application/json", content: `{"status":"ready"}`},
+		{name: "JSONL", mediaType: "application/x-ndjson", content: "{\"id\":1}\n{\"id\":2}\n"},
+		{name: "CSV", mediaType: "text/csv", content: "status,owner\nready,Todd\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			req := httptest.NewRequest(http.MethodGet, "/api/artifacts/11111111-1111-1111-1111-111111111111/content", nil)
+			recorder := httptest.NewRecorder()
+			writeArtifactContent(recorder, req, artifactContent{
+				content: []byte(test.content), mediaType: test.mediaType, filename: "data." + strings.ToLower(test.name), title: "Data", hash: "raw123",
+			})
+			if got := recorder.Header().Get("Content-Type"); got != test.mediaType+"; charset=utf-8" {
+				t.Fatalf("Content-Type = %q", got)
+			}
+			if got := recorder.Body.String(); got != test.content {
+				t.Fatalf("API body changed: %q", got)
+			}
+		})
+	}
+}
+
+func TestWriteArtifactContentLimitsJSONLPreview(t *testing.T) {
+	t.Parallel()
+	var content strings.Builder
+	for index := 1; index <= maxJSONLPreviewRecords+2; index++ {
+		fmt.Fprintf(&content, "{\"id\":%d}\n", index)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/a/11111111-1111-1111-1111-111111111111/events", nil)
+	recorder := httptest.NewRecorder()
+	writeArtifactContent(recorder, req, artifactContent{
+		content: []byte(content.String()), mediaType: "application/x-ndjson", filename: "events.jsonl", title: "Events", hash: "events123",
+	})
+
+	body := recorder.Body.String()
+	wantNotice := fmt.Sprintf("Showing first %d of %d records", maxJSONLPreviewRecords, maxJSONLPreviewRecords+2)
+	if !strings.Contains(body, wantNotice) {
+		t.Fatalf("rendered JSONL page missing preview notice %q", wantNotice)
+	}
+	if strings.Contains(body, fmt.Sprintf("Record %d", maxJSONLPreviewRecords+1)) {
+		t.Fatal("rendered JSONL page included records beyond the preview limit")
+	}
+}
+
+func TestWriteArtifactContentRevalidatesStructuredPageBeforeRendering(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest(http.MethodGet, "/a/11111111-1111-1111-1111-111111111111/results", nil)
+	etag := structuredPageETag("raw123", "application/json", "Results", "results.json")
+	req.Header.Set("If-None-Match", etag)
+	recorder := httptest.NewRecorder()
+
+	writeArtifactContent(recorder, req, artifactContent{
+		content: []byte(`{"malformed":`), mediaType: "application/json", filename: "results.json", title: "Results", hash: "raw123",
+	})
+
+	if got := recorder.Code; got != http.StatusNotModified {
+		t.Fatalf("status = %d, want 304 before structured content rendering", got)
+	}
+	if got := recorder.Header().Get("ETag"); got != etag {
+		t.Fatalf("ETag = %q, want %q", got, etag)
 	}
 }

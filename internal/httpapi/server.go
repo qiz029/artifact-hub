@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -307,6 +309,7 @@ func writeArtifactContent(w http.ResponseWriter, r *http.Request, artifact artif
 	etag := `"sha256-` + artifact.hash + `"`
 	content := artifact.content
 	mediaType := artifact.mediaType
+	responseFilename := safeFilename(artifact.filename)
 	cacheControl := "public, max-age=31536000, immutable"
 	if strings.HasPrefix(r.URL.Path, "/a/") && strings.HasPrefix(mediaType, "text/markdown") {
 		var rendered bytes.Buffer
@@ -333,11 +336,59 @@ func writeArtifactContent(w http.ResponseWriter, r *http.Request, artifact artif
 		mediaType = "text/html"
 		cacheControl = "no-cache"
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self' data: https: http:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
+	} else if strings.HasPrefix(r.URL.Path, "/a/") && strings.HasPrefix(mediaType, "application/json") {
+		etag = structuredPageETag(artifact.hash, artifact.mediaType, artifact.title, artifact.filename)
+		mediaType = "text/html"
+		responseFilename = renderedHTMLFilename(artifact.filename)
+		cacheControl = "no-cache"
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
+		if matchesETag(r.Header.Get("If-None-Match"), etag) {
+			setArtifactRepresentationHeaders(w, mediaType, responseFilename, etag, cacheControl)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		page, err := renderJSONPage(content, artifact.title, safeFilename(artifact.filename))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to render JSON page")
+			return
+		}
+		content = page
+	} else if strings.HasPrefix(r.URL.Path, "/a/") && strings.HasPrefix(mediaType, "application/x-ndjson") {
+		etag = structuredPageETag(artifact.hash, artifact.mediaType, artifact.title, artifact.filename)
+		mediaType = "text/html"
+		responseFilename = renderedHTMLFilename(artifact.filename)
+		cacheControl = "no-cache"
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
+		if matchesETag(r.Header.Get("If-None-Match"), etag) {
+			setArtifactRepresentationHeaders(w, mediaType, responseFilename, etag, cacheControl)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		page, err := renderJSONLPage(content, artifact.title, safeFilename(artifact.filename))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to render JSONL page")
+			return
+		}
+		content = page
+	} else if strings.HasPrefix(r.URL.Path, "/a/") && strings.HasPrefix(mediaType, "text/csv") {
+		etag = structuredPageETag(artifact.hash, artifact.mediaType, artifact.title, artifact.filename)
+		mediaType = "text/html"
+		responseFilename = renderedHTMLFilename(artifact.filename)
+		cacheControl = "no-cache"
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
+		if matchesETag(r.Header.Get("If-None-Match"), etag) {
+			setArtifactRepresentationHeaders(w, mediaType, responseFilename, etag, cacheControl)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		page, err := renderCSVPage(content, artifact.title, safeFilename(artifact.filename))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to render CSV page")
+			return
+		}
+		content = page
 	}
-	w.Header().Set("Content-Type", mediaType+"; charset=utf-8")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", safeFilename(artifact.filename)))
-	w.Header().Set("ETag", etag)
-	w.Header().Set("Cache-Control", cacheControl)
+	setArtifactRepresentationHeaders(w, mediaType, responseFilename, etag, cacheControl)
 	if strings.HasPrefix(artifact.mediaType, "text/html") {
 		w.Header().Set("Content-Security-Policy", "sandbox allow-scripts allow-forms; default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline' https:; font-src data: https:; script-src 'unsafe-inline' https:; connect-src 'none'; frame-src 'none'")
 	}
@@ -347,6 +398,18 @@ func writeArtifactContent(w http.ResponseWriter, r *http.Request, artifact artif
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(content)
+}
+
+func setArtifactRepresentationHeaders(w http.ResponseWriter, mediaType, filename, etag, cacheControl string) {
+	w.Header().Set("Content-Type", mediaType+"; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", filename))
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", cacheControl)
+}
+
+func structuredPageETag(hash, mediaType, title, filename string) string {
+	digest := sha256.Sum256([]byte("structured-page-v3:" + mediaType + ":" + hash + ":" + title + ":" + filename))
+	return `"sha256-` + hex.EncodeToString(digest[:]) + `"`
 }
 
 const markdownPageHTML = `<!doctype html>
@@ -592,9 +655,84 @@ func artifactFormat(filename string, content []byte) (string, string, error) {
 		return "html", "text/html", nil
 	case ".md", ".markdown":
 		return "markdown", "text/markdown", nil
+	case ".json":
+		if !utf8.Valid(content) {
+			return "", "", fmt.Errorf("JSON artifact must be UTF-8 encoded")
+		}
+		if !json.Valid(content) {
+			return "", "", fmt.Errorf("JSON artifact must contain valid JSON")
+		}
+		return "json", "application/json", nil
+	case ".jsonl":
+		if err := validateJSONLines(content); err != nil {
+			return "", "", err
+		}
+		return "jsonl", "application/x-ndjson", nil
+	case ".csv":
+		if !utf8.Valid(content) {
+			return "", "", fmt.Errorf("CSV artifact must be UTF-8 encoded")
+		}
+		reader := csv.NewReader(bytes.NewReader(content))
+		reader.ReuseRecord = true
+		recordCount := 0
+		for {
+			if _, err := reader.Read(); err == io.EOF {
+				break
+			} else if err != nil {
+				return "", "", fmt.Errorf("CSV artifact must contain valid CSV: %w", err)
+			}
+			recordCount++
+		}
+		if recordCount == 0 {
+			return "", "", fmt.Errorf("CSV artifact must contain at least one record")
+		}
+		return "csv", "text/csv", nil
 	default:
-		return "", "", fmt.Errorf("only .html, .htm, .md, and .markdown files are supported")
+		return "", "", fmt.Errorf("only HTML, Markdown, JSON, JSONL, and CSV files are supported")
 	}
+}
+
+func validateJSONLines(content []byte) error {
+	if !utf8.Valid(content) {
+		return fmt.Errorf("JSONL artifact must be UTF-8 encoded")
+	}
+	recordCount := 0
+	lineNumber := 0
+	for len(content) > 0 {
+		lineNumber++
+		lineEnd := bytes.IndexByte(content, '\n')
+		line := content
+		if lineEnd >= 0 {
+			line = content[:lineEnd]
+			content = content[lineEnd+1:]
+		} else {
+			content = nil
+		}
+		if len(trimJSONWhitespace(line)) == 0 {
+			return fmt.Errorf("JSONL artifact line %d cannot be empty", lineNumber)
+		}
+		if !json.Valid(line) {
+			return fmt.Errorf("JSONL artifact line %d must contain valid JSON", lineNumber)
+		}
+		recordCount++
+	}
+	if recordCount == 0 {
+		return fmt.Errorf("JSONL artifact must contain at least one record")
+	}
+	return nil
+}
+
+func trimJSONWhitespace(content []byte) []byte {
+	return bytes.Trim(content, " \t\r\n")
+}
+
+func renderedHTMLFilename(filename string) string {
+	filename = safeFilename(filename)
+	base := strings.TrimSuffix(filename, filepath.Ext(filename))
+	if base == "" || base == "." {
+		base = "artifact"
+	}
+	return base + ".html"
 }
 
 func parseTags(value string) []string {

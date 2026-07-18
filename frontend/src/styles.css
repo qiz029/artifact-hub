@@ -118,6 +118,9 @@ kbd { padding: 3px 5px; color: #6c6f7c; background: rgba(255,255,255,.04); borde
 .file-icon, .upload-file-icon { width: 29px; height: 29px; display: grid; place-items: center; flex: none; border-radius: 8px; }
 .file-icon.html, .upload-file-icon.html { color: #eea05d; background: rgba(237,154,85,.11); border: 1px solid rgba(237,154,85,.12); }
 .file-icon.markdown, .upload-file-icon.markdown { color: #8c83f5; background: rgba(120,107,242,.12); border: 1px solid rgba(120,107,242,.13); }
+.file-icon.json, .upload-file-icon.json { color: #67c6e8; background: rgba(69,165,222,.11); border: 1px solid rgba(69,165,222,.14); }
+.file-icon.jsonl, .upload-file-icon.jsonl { color: #d0a5f5; background: rgba(181,119,229,.11); border: 1px solid rgba(181,119,229,.14); }
+.file-icon.csv, .upload-file-icon.csv { color: #69d3a4; background: rgba(53,183,134,.11); border: 1px solid rgba(53,183,134,.14); }
 .type-pill, .artifact-type-mark { padding: 3px 6px; color: #7f8290; background: rgba(255,255,255,.04); border: 1px solid var(--border); border-radius: 5px; font: 500 8.5px DM Mono, monospace; letter-spacing: .04em; }
 .artifact-row > p { margin: 7px 0 9px 38px; overflow: hidden; color: #767986; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
 .artifact-row-bottom { min-height: 18px; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-left: 38px; }
@@ -185,6 +188,9 @@ kbd { padding: 3px 5px; color: #6c6f7c; background: rgba(255,255,255,.04); borde
 .artifact-identity { display: flex; align-items: center; gap: 11px; }
 .artifact-identity .artifact-type-mark { min-width: 40px; min-height: 36px; display: grid; place-items: center; padding: 0; color: #e3a06a; background: rgba(237,154,85,.09); border-color: rgba(237,154,85,.13); border-radius: 8px; }
 .artifact-identity .artifact-type-mark.markdown { color: #a39afa; background: rgba(120,107,242,.1); border-color: rgba(149,137,255,.13); }
+.artifact-identity .artifact-type-mark.json { color: #75cceb; background: rgba(69,165,222,.09); border-color: rgba(69,165,222,.14); }
+.artifact-identity .artifact-type-mark.jsonl { color: #d5adf7; background: rgba(181,119,229,.09); border-color: rgba(181,119,229,.14); }
+.artifact-identity .artifact-type-mark.csv { color: #72d6aa; background: rgba(53,183,134,.09); border-color: rgba(53,183,134,.14); }
 .artifact-identity div { min-width: 0; }
 .artifact-identity strong, .artifact-identity span { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .artifact-identity strong { color: #dfe0e5; font-size: 11.5px; font-weight: 500; }

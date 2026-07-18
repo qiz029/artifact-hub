@@ -13,6 +13,7 @@ type ArtifactDetailsProps = {
 
 export function ArtifactDetails({ artifact, open, copied, onClose, onCopy, onDelete }: ArtifactDetailsProps) {
   const metadata = Object.entries(artifact.metadata ?? {})
+  const typeLabel = artifact.type === 'markdown' ? 'MD' : artifact.type.toUpperCase()
 
   return (
     <aside className={`details-panel ${open ? 'open' : ''}`} aria-label="Artifact 元数据">
@@ -21,7 +22,7 @@ export function ArtifactDetails({ artifact, open, copied, onClose, onCopy, onDel
         <button type="button" aria-label="关闭元数据" onClick={onClose}><X size={17} /></button>
       </div>
       <section className="details-section artifact-identity">
-        <span className={`artifact-type-mark ${artifact.type}`}>{artifact.type === 'html' ? 'HTML' : 'MD'}</span>
+        <span className={`artifact-type-mark ${artifact.type}`}>{typeLabel}</span>
         <div><strong>{artifact.title}</strong><span>{artifact.originalFilename}</span></div>
       </section>
       <section className="details-section">
