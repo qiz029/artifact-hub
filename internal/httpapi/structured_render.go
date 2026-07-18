@@ -12,9 +12,12 @@ import (
 )
 
 const (
-	maxCSVPreviewRows    = 1000
-	maxCSVPreviewColumns = 100
-	maxCSVPreviewBytes   = 1 << 20
+	maxJSONPrettySourceBytes = 512 << 10
+	maxJSONPreviewBytes      = 512 << 10
+	maxJSONPreviewLines      = 5000
+	maxCSVPreviewRows        = 1000
+	maxCSVPreviewColumns     = 100
+	maxCSVPreviewBytes       = 1 << 20
 )
 
 var (
@@ -33,33 +36,88 @@ type structuredPageData struct {
 }
 
 func renderJSONPage(content []byte, title, filename string) ([]byte, error) {
-	var value any
-	if err := json.Unmarshal(content, &value); err != nil {
-		return nil, fmt.Errorf("parse JSON: %w", err)
+	formatted := content
+	summary := largeJSONSummary(content)
+	mode := "Raw preview"
+	notice := "JSON preview truncated to keep this page responsive; the raw API still returns the complete artifact."
+	highlight := false
+	if len(content) <= maxJSONPrettySourceBytes {
+		var value any
+		if err := json.Unmarshal(content, &value); err != nil {
+			return nil, fmt.Errorf("parse JSON: %w", err)
+		}
+		var pretty bytes.Buffer
+		if err := json.Indent(&pretty, content, "", "  "); err != nil {
+			return nil, fmt.Errorf("format JSON: %w", err)
+		}
+		formatted = pretty.Bytes()
+		summary = jsonSummary(value)
+		mode = "Pretty printed"
+		notice = ""
+		highlight = true
 	}
 
-	var formatted bytes.Buffer
-	if err := json.Indent(&formatted, content, "", "  "); err != nil {
-		return nil, fmt.Errorf("format JSON: %w", err)
+	lines, previewClipped := boundedJSONLines(formatted)
+	if previewClipped && notice == "" {
+		notice = "JSON preview truncated to keep this page responsive; the raw API still returns the complete artifact."
 	}
-
-	lines := strings.Split(formatted.String(), "\n")
 	var body strings.Builder
-	body.WriteString(`<section class="data-card json-card"><header class="card-bar"><span>Pretty printed</span><strong>`)
+	body.WriteString(`<section class="data-card json-card"><header class="card-bar"><span>`)
+	body.WriteString(mode)
+	body.WriteString(`</span><strong>`)
 	fmt.Fprintf(&body, "%d lines", len(lines))
-	body.WriteString(`</strong></header><pre class="json-view" aria-label="JSON content"><code>`)
+	body.WriteString(`</strong></header>`)
+	if notice != "" {
+		body.WriteString(`<p class="preview-note">`)
+		body.WriteString(template.HTMLEscapeString(notice))
+		body.WriteString(`</p>`)
+	}
+	body.WriteString(`<pre class="json-view" aria-label="JSON content"><code>`)
 	for index, line := range lines {
 		body.WriteString(`<span class="code-line"><span class="line-number" aria-hidden="true">`)
 		fmt.Fprintf(&body, "%d", index+1)
 		body.WriteString(`</span><span class="line-content">`)
-		body.WriteString(highlightJSONLine(line))
+		if highlight {
+			body.WriteString(highlightJSONLine(line))
+		} else {
+			body.WriteString(template.HTMLEscapeString(line))
+		}
 		body.WriteString("</span></span>")
 	}
 	body.WriteString(`</code></pre></section>`)
 
 	return renderStructuredPage(structuredPageData{
-		Title: title, Filename: filename, Kind: "JSON", Summary: jsonSummary(value), Content: template.HTML(body.String()),
+		Title: title, Filename: filename, Kind: "JSON", Summary: summary, Content: template.HTML(body.String()),
 	})
+}
+
+func boundedJSONLines(content []byte) ([]string, bool) {
+	limit := min(len(content), maxJSONPreviewBytes)
+	for limit > 0 && !utf8.Valid(content[:limit]) {
+		limit--
+	}
+	clipped := limit < len(content)
+	rawLines := bytes.Split(content[:limit], []byte("\n"))
+	if len(rawLines) > maxJSONPreviewLines {
+		rawLines = rawLines[:maxJSONPreviewLines]
+		clipped = true
+	}
+	lines := make([]string, len(rawLines))
+	for index, line := range rawLines {
+		lines[index] = string(line)
+	}
+	return lines, clipped
+}
+
+func largeJSONSummary(content []byte) string {
+	trimmed := bytes.TrimSpace(content)
+	if len(trimmed) > 0 && trimmed[0] == '{' {
+		return "Large JSON object"
+	}
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		return "Large JSON array"
+	}
+	return "Large JSON value"
 }
 
 func jsonSummary(value any) string {
@@ -240,7 +298,7 @@ const structuredPageHTML = `<!doctype html>
     .data-card { overflow: hidden; background: #fff; border: 1px solid rgba(45,40,32,.13); border-radius: 15px; box-shadow: 0 28px 80px rgba(67,55,36,.12); }
     .card-bar { height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 15px; color: #8d8990; background: #191a20; border-bottom: 1px solid rgba(255,255,255,.08); font: 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; letter-spacing: .08em; }
     .card-bar strong { color: #656873; font-weight: 500; }
-    .json-view { max-height: none; margin: 0; overflow: auto; color: #d9dae0; background: #111217; font: 13px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; }
+    .json-view { max-height: min(72vh, 900px); margin: 0; overflow: auto; color: #d9dae0; background: #111217; font: 13px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; }
     .json-view code { display: block; min-width: max-content; padding: 15px 0 20px; }
     .code-line { display: grid; grid-template-columns: 58px minmax(max-content, 1fr); min-height: 22px; padding-right: 24px; }
     .code-line:hover { background: rgba(255,255,255,.035); }

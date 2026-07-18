@@ -334,7 +334,6 @@ func writeArtifactContent(w http.ResponseWriter, r *http.Request, artifact artif
 		renderedHash := sha256.Sum256(content)
 		etag = `"sha256-` + hex.EncodeToString(renderedHash[:]) + `"`
 		mediaType = "text/html"
-		responseFilename = renderedHTMLFilename(artifact.filename)
 		cacheControl = "no-cache"
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self' data: https: http:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
 	} else if strings.HasPrefix(r.URL.Path, "/a/") && strings.HasPrefix(mediaType, "application/json") {
@@ -652,11 +651,17 @@ func artifactFormat(filename string, content []byte) (string, string, error) {
 			return "", "", fmt.Errorf("CSV artifact must be UTF-8 encoded")
 		}
 		reader := csv.NewReader(bytes.NewReader(content))
-		records, err := reader.ReadAll()
-		if err != nil {
-			return "", "", fmt.Errorf("CSV artifact must contain valid CSV: %w", err)
+		reader.ReuseRecord = true
+		recordCount := 0
+		for {
+			if _, err := reader.Read(); err == io.EOF {
+				break
+			} else if err != nil {
+				return "", "", fmt.Errorf("CSV artifact must contain valid CSV: %w", err)
+			}
+			recordCount++
 		}
-		if len(records) == 0 {
+		if recordCount == 0 {
 			return "", "", fmt.Errorf("CSV artifact must contain at least one record")
 		}
 		return "csv", "text/csv", nil

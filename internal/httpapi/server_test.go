@@ -151,8 +151,8 @@ func TestWriteArtifactContentRendersMarkdownPublicPage(t *testing.T) {
 	if got := response.Header.Get("Content-Type"); got != "text/html; charset=utf-8" {
 		t.Fatalf("Content-Type = %q, want rendered HTML", got)
 	}
-	if got := response.Header.Get("Content-Disposition"); !strings.Contains(got, `filename="release-notes.html"`) {
-		t.Fatalf("Content-Disposition = %q, want rendered HTML filename", got)
+	if got := response.Header.Get("Content-Disposition"); !strings.Contains(got, `filename="release-notes.md"`) {
+		t.Fatalf("Content-Disposition = %q, want existing Markdown filename contract", got)
 	}
 	if got := response.Header.Get("Cache-Control"); got != "no-cache" {
 		t.Fatalf("Cache-Control = %q, want rendered Markdown pages to revalidate", got)
@@ -325,6 +325,31 @@ func TestWriteArtifactContentLimitsCSVPreview(t *testing.T) {
 	}
 	if strings.Contains(body, fmt.Sprintf("case-%04d", maxCSVPreviewRows+1)) {
 		t.Fatal("rendered CSV page included rows beyond the preview limit")
+	}
+}
+
+func TestWriteArtifactContentLimitsLargeJSONPreview(t *testing.T) {
+	t.Parallel()
+	var jsonContent strings.Builder
+	jsonContent.WriteByte('[')
+	for jsonContent.Len() <= maxJSONPrettySourceBytes {
+		jsonContent.WriteString("0,")
+	}
+	jsonContent.WriteString("0]")
+	req := httptest.NewRequest(http.MethodGet, "/a/11111111-1111-1111-1111-111111111111/large-json", nil)
+	recorder := httptest.NewRecorder()
+	writeArtifactContent(recorder, req, artifactContent{
+		content: []byte(jsonContent.String()), mediaType: "application/json", filename: "large.json", title: "Large JSON", hash: "large-json-123",
+	})
+
+	body := recorder.Body.String()
+	for _, fragment := range []string{"Raw preview", "JSON preview truncated", "Large JSON array"} {
+		if !strings.Contains(body, fragment) {
+			t.Fatalf("rendered large JSON page missing %q", fragment)
+		}
+	}
+	if len(body) > maxJSONPreviewBytes*8 {
+		t.Fatalf("rendered large JSON page is %d bytes, want bounded output", len(body))
 	}
 }
 
