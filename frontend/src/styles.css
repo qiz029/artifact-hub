@@ -303,6 +303,76 @@ kbd { padding: 3px 5px; color: #6c6f7c; background: rgba(255,255,255,.04); borde
   .published-badge { display: none; }
 }
 
+@media (min-width: 821px) {
+  .brand strong { font-size: 16px; }
+  .brand span { font-size: 10px; }
+  .global-search input, .artifact-search input { font-size: 14px; }
+  kbd { font-size: 10px; }
+
+  .library-kicker, .panel-label, .sidebar-rail span, .eyebrow { font-size: 10.5px; }
+  .library-card > span { font-size: 11.5px; }
+  .library-signal { font-size: 11px; }
+  .collection-name { font-size: 14px; }
+  .collection-description { font-size: 11px; }
+  .collection-count { font-size: 11px; }
+  .new-collection { font-size: 13px; }
+  .storage-note { font-size: 12px; }
+
+  .artifact-list-header h1 { font-size: 21px; }
+  .artifact-list-header p:not(.eyebrow) { font-size: 13px; }
+  .collection-status { font-size: 11px; }
+  .artifact-row-top strong { font-size: 14.5px; }
+  .type-pill, .artifact-type-mark { font-size: 10px; }
+  .artifact-row > p { font-size: 12.5px; }
+  .tag { font-size: 10.5px; }
+  .artifact-row-bottom time { font-size: 10.5px; }
+  .empty-list strong { font-size: 14px; }
+  .empty-list span, .empty-list button { font-size: 12px; }
+
+  .breadcrumb { font-size: 10.5px; }
+  .preview-title h2 { font-size: 20px; }
+  .preview-title p { font-size: 12px; }
+  .published-badge { font-size: 10px; }
+  .ghost-button { font-size: 12px; }
+  .browser-bar span { font-size: 10.5px; }
+  .markdown-body { font-size: 16px; line-height: 1.72; }
+  .markdown-body h1 { font-size: 34px; }
+  .markdown-body h2 { font-size: 24px; }
+  .markdown-body h3 { font-size: 19px; }
+  .empty-preview-kicker, .empty-preview-features span { font-size: 10.5px; }
+  .empty-preview > p { font-size: 14px; }
+
+  .details-heading h3 { font-size: 17px; }
+  .artifact-identity strong { font-size: 13px; }
+  .artifact-identity span { font-size: 10.5px; }
+  .detail-row { font-size: 12px; }
+  .mono { font-size: 10.5px; }
+  .detail-label { font-size: 10.5px; }
+  .muted { font-size: 11.5px; }
+  .checksum code { font-size: 10.5px; }
+  .public-link-actions button span { font-size: 10.5px; }
+  .public-link p { font-size: 11px; }
+  .details-danger-zone button { font-size: 11.5px; }
+
+  .modal > header h2 { font-size: 20px; }
+  .modal > header p { font-size: 12.5px; }
+  .field > span { font-size: 10.5px; }
+  .field input, .field textarea { font-size: 14px; }
+  .code-input { font-size: 12px !important; }
+  .drop-zone strong { font-size: 13.5px; }
+  .drop-zone span { font-size: 11px; }
+  .immutable-callout strong { font-size: 11px; }
+  .immutable-callout span { font-size: 11px; }
+  .advanced-fields summary { font-size: 12px; }
+  .advanced-fields summary small { font-size: 10px; }
+  .delete-confirmation strong { font-size: 13.5px; }
+  .delete-confirmation span { font-size: 10.5px; }
+  .delete-warning, .destructive-button, .primary-button, .form-error { font-size: 12px; }
+  .toast { font-size: 12.5px; }
+  .loading-screen strong { font-size: 17px; }
+  .loading-screen > span { font-size: 11px; }
+}
+
 @media (max-width: 820px) {
   html, body, #root { height: 100dvh; overflow: hidden; }
   .app-shell, .app-shell.is-fullscreen { width: 100%; height: 100dvh; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
