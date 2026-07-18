@@ -3,6 +3,7 @@ import {
   ArrowUpRight,
   ArrowLeft,
   Box,
+  Braces,
   Check,
   ChevronRight,
   Code2,
@@ -21,6 +22,7 @@ import {
   Plus,
   Search,
   ShieldCheck,
+  Table2,
   UploadCloud,
   X,
 } from 'lucide-react'
@@ -34,6 +36,18 @@ import type { Artifact, Collection } from './types'
 
 type Modal = 'collection' | 'artifact' | null
 type MobileStage = 'collections' | 'artifacts' | 'detail'
+
+function artifactTypeLabel(type: Artifact['type'], long = false) {
+  if (type === 'markdown') return long ? 'Markdown' : 'MD'
+  return type.toUpperCase()
+}
+
+function ArtifactTypeIcon({ type, size = 15 }: { type: Artifact['type']; size?: number }) {
+  if (type === 'html') return <FileCode2 size={size} />
+  if (type === 'json') return <Braces size={size} />
+  if (type === 'csv') return <Table2 size={size} />
+  return <FileText size={size} />
+}
 
 function App() {
   const [collections, setCollections] = useState<Collection[]>([])
@@ -287,9 +301,9 @@ function App() {
                 {artifacts.map((artifact) => (
                   <button className={artifact.id === artifactId ? 'artifact-row active' : 'artifact-row'} key={artifact.id} onClick={() => { setArtifactId(artifact.id); setDetailsOpen(false); setMobileStage('detail') }}>
                     <div className="artifact-row-top">
-                      <span className={`file-icon ${artifact.type}`}>{artifact.type === 'html' ? <FileCode2 size={15} /> : <FileText size={15} />}</span>
+                      <span className={`file-icon ${artifact.type}`}><ArtifactTypeIcon type={artifact.type} /></span>
                       <strong>{artifact.title}</strong>
-                      <span className="type-pill">{artifact.type === 'html' ? 'HTML' : 'MD'}</span>
+                      <span className="type-pill">{artifactTypeLabel(artifact.type)}</span>
                     </div>
                     <p>{artifact.description || artifact.originalFilename}</p>
                     <div className="artifact-row-bottom">
@@ -302,7 +316,7 @@ function App() {
                   <div className="empty-list">
                     <UploadCloud size={22} />
                     <strong>{artifactQuery ? '没有匹配结果' : '这里还没有 Artifact'}</strong>
-                    <span>{artifactQuery ? '试试其他关键词' : '发布 HTML 或 Markdown，获得一个稳定地址'}</span>
+                    <span>{artifactQuery ? '试试其他关键词' : '发布 HTML、Markdown、JSON 或 CSV，获得一个稳定地址'}</span>
                     {!artifactQuery && selectedCollection && <button onClick={() => setModal('artifact')}>发布第一个</button>}
                   </div>
                 )}
@@ -317,7 +331,7 @@ function App() {
           <>
             <header className="preview-header">
               <div className="preview-title">
-                <div className="breadcrumb"><span>{selectedCollection?.name}</span><ChevronRight size={12} /><span>{selectedArtifact.type === 'html' ? 'HTML' : 'Markdown'}</span></div>
+                <div className="breadcrumb"><span>{selectedCollection?.name}</span><ChevronRight size={12} /><span>{artifactTypeLabel(selectedArtifact.type, true)}</span></div>
                 <h2>{selectedArtifact.title}</h2>
                 {selectedArtifact.description && <p>{selectedArtifact.description}</p>}
               </div>
@@ -331,7 +345,7 @@ function App() {
             </header>
             <div className="mobile-artifact-meta">
               <div className="mobile-meta-row">
-                <span className="type-pill">{selectedArtifact.type === 'html' ? 'HTML' : 'MARKDOWN'}</span>
+                <span className="type-pill">{artifactTypeLabel(selectedArtifact.type, true).toUpperCase()}</span>
                 <time>{relativeTime(selectedArtifact.createdAt)}</time>
                 <span className="mobile-immutable"><LockKeyhole size={11} /> Immutable</span>
                 <button type="button" onClick={() => setDetailsOpen(true)}><Info size={15} /> 元数据</button>
@@ -339,10 +353,14 @@ function App() {
               {!!selectedArtifact.tags.length && <div className="mobile-tag-row">{selectedArtifact.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div>}
             </div>
             <div className="preview-stage">
-              {selectedArtifact.type === 'html' ? (
+              {selectedArtifact.type !== 'markdown' ? (
                 <div className="browser-frame">
                   <div className="browser-bar"><i /><i /><i /><span>{selectedArtifact.publicUrl.replace(/^https?:\/\//, '')}</span><MoreHorizontal size={15} /></div>
-                  <iframe title={selectedArtifact.title} src={selectedArtifact.contentUrl} sandbox="allow-scripts allow-forms" />
+                  <iframe
+                    title={selectedArtifact.title}
+                    src={selectedArtifact.type === 'html' ? selectedArtifact.contentUrl : selectedArtifact.publicUrl}
+                    sandbox={selectedArtifact.type === 'html' ? 'allow-scripts allow-forms' : ''}
+                  />
                 </div>
               ) : (
                 <article className="markdown-body">
@@ -356,7 +374,7 @@ function App() {
             <div className="empty-preview-orbit"><div className="empty-preview-mark"><Layers3 size={25} /></div><i /><i /><i /></div>
             <span className="empty-preview-kicker">Content-addressed workspace</span>
             <h2>Publish once. Reference forever.</h2>
-            <p>把 HTML 与 Markdown 成品变成稳定、可验证、可分享的 Artifact。</p>
+            <p>把 HTML、Markdown 与结构化数据变成稳定、可验证、可分享的 Artifact。</p>
             <div className="empty-preview-features"><span><LockKeyhole size={13} /> Immutable</span><span><Code2 size={13} /> Sandboxed</span><span><Database size={13} /> Self-hosted</span></div>
             {selectedCollection && <button className="primary-button" onClick={() => setModal('artifact')}><UploadCloud size={16} /> 发布 Artifact</button>}
           </div>

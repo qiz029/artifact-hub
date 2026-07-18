@@ -1,0 +1,249 @@
+package httpapi
+
+import (
+	"bytes"
+	"encoding/csv"
+	"encoding/json"
+	"fmt"
+	"html/template"
+	"strings"
+)
+
+var (
+	structuredPageTmpl = template.Must(template.New("structured-page").Parse(structuredPageHTML))
+	csvTableTmpl       = template.Must(template.New("csv-table").Funcs(template.FuncMap{
+		"inc": func(value int) int { return value + 1 },
+	}).Parse(csvTableHTML))
+)
+
+type structuredPageData struct {
+	Title    string
+	Filename string
+	Kind     string
+	Summary  string
+	Content  template.HTML
+}
+
+func renderJSONPage(content []byte, title, filename string) ([]byte, error) {
+	var value any
+	if err := json.Unmarshal(content, &value); err != nil {
+		return nil, fmt.Errorf("parse JSON: %w", err)
+	}
+
+	var formatted bytes.Buffer
+	if err := json.Indent(&formatted, content, "", "  "); err != nil {
+		return nil, fmt.Errorf("format JSON: %w", err)
+	}
+
+	lines := strings.Split(formatted.String(), "\n")
+	var body strings.Builder
+	body.WriteString(`<section class="data-card json-card"><header class="card-bar"><span>Pretty printed</span><strong>`)
+	fmt.Fprintf(&body, "%d lines", len(lines))
+	body.WriteString(`</strong></header><pre class="json-view" aria-label="JSON content"><code>`)
+	for index, line := range lines {
+		body.WriteString(`<span class="code-line"><span class="line-number" aria-hidden="true">`)
+		fmt.Fprintf(&body, "%d", index+1)
+		body.WriteString(`</span><span class="line-content">`)
+		body.WriteString(highlightJSONLine(line))
+		body.WriteString("</span></span>")
+	}
+	body.WriteString(`</code></pre></section>`)
+
+	return renderStructuredPage(structuredPageData{
+		Title: title, Filename: filename, Kind: "JSON", Summary: jsonSummary(value), Content: template.HTML(body.String()),
+	})
+}
+
+func jsonSummary(value any) string {
+	switch typed := value.(type) {
+	case map[string]any:
+		return fmt.Sprintf("%d top-level fields", len(typed))
+	case []any:
+		return fmt.Sprintf("%d top-level items", len(typed))
+	default:
+		return "Scalar value"
+	}
+}
+
+func renderCSVPage(content []byte, title, filename string) ([]byte, error) {
+	reader := csv.NewReader(bytes.NewReader(content))
+	reader.FieldsPerRecord = -1
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("parse CSV: %w", err)
+	}
+	if len(records) == 0 {
+		return nil, fmt.Errorf("parse CSV: no records")
+	}
+
+	columnCount := 0
+	for _, record := range records {
+		if len(record) > columnCount {
+			columnCount = len(record)
+		}
+	}
+	headings := make([]string, columnCount)
+	copy(headings, records[0])
+	if len(headings) > 0 {
+		headings[0] = strings.TrimPrefix(headings[0], "\ufeff")
+	}
+	for index := range headings {
+		if strings.TrimSpace(headings[index]) == "" {
+			headings[index] = fmt.Sprintf("Column %d", index+1)
+		}
+	}
+	rows := make([][]string, 0, len(records)-1)
+	for _, record := range records[1:] {
+		row := make([]string, columnCount)
+		copy(row, record)
+		rows = append(rows, row)
+	}
+
+	var table bytes.Buffer
+	if err := csvTableTmpl.Execute(&table, struct {
+		Headings []string
+		Rows     [][]string
+	}{Headings: headings, Rows: rows}); err != nil {
+		return nil, fmt.Errorf("render CSV table: %w", err)
+	}
+
+	return renderStructuredPage(structuredPageData{
+		Title: title, Filename: filename, Kind: "CSV",
+		Summary: fmt.Sprintf("%d data rows · %d columns", len(rows), columnCount),
+		Content: template.HTML(table.String()),
+	})
+}
+
+func highlightJSONLine(line string) string {
+	var highlighted strings.Builder
+	for index := 0; index < len(line); {
+		if line[index] == '"' {
+			end := index + 1
+			for end < len(line) {
+				if line[end] == '\\' {
+					end += 2
+					continue
+				}
+				if line[end] == '"' {
+					end++
+					break
+				}
+				end++
+			}
+			className := "json-string"
+			remainder := strings.TrimSpace(line[end:])
+			if strings.HasPrefix(remainder, ":") {
+				className = "json-key"
+			}
+			fmt.Fprintf(&highlighted, `<span class="%s">%s</span>`, className, template.HTMLEscapeString(line[index:end]))
+			index = end
+			continue
+		}
+
+		end := index
+		for end < len(line) && !strings.ContainsRune(" \t{}[],:\"", rune(line[end])) {
+			end++
+		}
+		if end == index {
+			highlighted.WriteString(template.HTMLEscapeString(line[index : index+1]))
+			index++
+			continue
+		}
+		token := line[index:end]
+		className := "json-number"
+		if token == "true" || token == "false" {
+			className = "json-boolean"
+		} else if token == "null" {
+			className = "json-null"
+		}
+		fmt.Fprintf(&highlighted, `<span class="%s">%s</span>`, className, template.HTMLEscapeString(token))
+		index = end
+	}
+	return highlighted.String()
+}
+
+func renderStructuredPage(data structuredPageData) ([]byte, error) {
+	var page bytes.Buffer
+	if err := structuredPageTmpl.Execute(&page, data); err != nil {
+		return nil, fmt.Errorf("render structured page: %w", err)
+	}
+	return page.Bytes(), nil
+}
+
+const structuredPageHTML = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{{.Title}} · Artifact Hub</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #24252b; background: #f1efe9; font-synthesis: none; text-rendering: optimizeLegibility; }
+    * { box-sizing: border-box; }
+    html { min-width: 320px; background: #f1efe9; }
+    body { min-height: 100vh; margin: 0; background: radial-gradient(circle at 15% 0%, rgba(111,93,230,.11), transparent 28rem), #f1efe9; }
+    .page-shell { width: min(1380px, calc(100% - 40px)); margin: 0 auto; padding: clamp(32px, 6vw, 72px) 0 72px; }
+    .artifact-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 32px; margin: 0 4px 24px; }
+    .artifact-kind { display: inline-flex; align-items: center; min-height: 24px; margin-bottom: 14px; padding: 0 9px; color: #6257cf; background: rgba(98,87,207,.09); border: 1px solid rgba(98,87,207,.16); border-radius: 6px; font: 700 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .1em; }
+    h1 { max-width: 900px; margin: 0; color: #17181d; font-size: clamp(2rem, 5vw, 3.5rem); line-height: 1.04; letter-spacing: -.055em; }
+    .filename { margin: 12px 0 0; color: #77736b; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+    .summary { flex: none; margin: 0 0 4px; padding: 9px 12px; color: #68645c; background: rgba(255,255,255,.52); border: 1px solid rgba(66,59,48,.1); border-radius: 8px; font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; box-shadow: 0 8px 24px rgba(62,52,36,.05); }
+    .data-card { overflow: hidden; background: #fff; border: 1px solid rgba(45,40,32,.13); border-radius: 15px; box-shadow: 0 28px 80px rgba(67,55,36,.12); }
+    .card-bar { height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 15px; color: #8d8990; background: #191a20; border-bottom: 1px solid rgba(255,255,255,.08); font: 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; letter-spacing: .08em; }
+    .card-bar strong { color: #656873; font-weight: 500; }
+    .json-view { max-height: none; margin: 0; overflow: auto; color: #d9dae0; background: #111217; font: 13px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; }
+    .json-view code { display: block; min-width: max-content; padding: 15px 0 20px; }
+    .code-line { display: grid; grid-template-columns: 58px minmax(max-content, 1fr); min-height: 22px; padding-right: 24px; }
+    .code-line:hover { background: rgba(255,255,255,.035); }
+    .line-number { padding-right: 17px; color: #4f515a; border-right: 1px solid rgba(255,255,255,.055); text-align: right; user-select: none; }
+    .line-content { padding-left: 18px; white-space: pre; }
+    .json-key { color: #9cdcfe; }
+    .json-string { color: #b6d99b; }
+    .json-number { color: #e9b982; }
+    .json-boolean { color: #c6a7ef; }
+    .json-null { color: #7f828d; font-style: italic; }
+    .table-scroll { max-width: 100%; overflow: auto; background: #fff; }
+    .csv-table { width: 100%; min-width: max-content; border-spacing: 0; border-collapse: separate; color: #32333a; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .csv-table th, .csv-table td { max-width: 520px; padding: 11px 14px; overflow-wrap: anywhere; border-right: 1px solid #e8e6e0; border-bottom: 1px solid #e8e6e0; text-align: left; vertical-align: top; white-space: pre-wrap; }
+    .csv-table thead th { position: sticky; top: 0; z-index: 2; color: #4a4657; background: #efedf8; border-bottom-color: #d8d4e8; font-weight: 750; letter-spacing: .01em; }
+    .csv-table tbody tr:nth-child(even) td, .csv-table tbody tr:nth-child(even) th { background: #faf9f6; }
+    .csv-table tbody tr:hover td, .csv-table tbody tr:hover th { background: #f3f1fb; }
+    .csv-table .row-number { position: sticky; left: 0; z-index: 1; width: 54px; min-width: 54px; color: #99959c; background: #f7f6f2; border-right-color: #dedbd3; font-weight: 500; text-align: right; user-select: none; }
+    .csv-table thead .row-number { z-index: 3; color: #777181; background: #e7e4f1; }
+    .page-footer { margin-top: 22px; color: #8b867c; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; text-align: center; text-transform: uppercase; letter-spacing: .09em; }
+    @media (max-width: 700px) {
+      .page-shell { width: 100%; padding: 0; }
+      .artifact-heading { align-items: flex-start; flex-direction: column; gap: 14px; margin: 0; padding: 25px 18px 20px; }
+      .artifact-kind { margin-bottom: 10px; }
+      h1 { font-size: 2rem; }
+      .summary { margin: 0; }
+      .data-card { border-right: 0; border-left: 0; border-radius: 0; box-shadow: none; }
+      .json-view { font-size: 12px; }
+      .code-line { grid-template-columns: 42px minmax(max-content, 1fr); padding-right: 16px; }
+      .line-number { padding-right: 11px; }
+      .line-content { padding-left: 12px; }
+      .page-footer { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page-shell">
+    <header class="artifact-heading">
+      <div><span class="artifact-kind">{{.Kind}}</span><h1>{{.Title}}</h1><p class="filename">{{.Filename}}</p></div>
+      <p class="summary">{{.Summary}}</p>
+    </header>
+    {{.Content}}
+    <footer class="page-footer">Immutable artifact · Rendered for inspection</footer>
+  </main>
+</body>
+</html>`
+
+const csvTableHTML = `<section class="data-card csv-card">
+  <header class="card-bar"><span>Tabular preview</span><strong>First row used as headings</strong></header>
+  <div class="table-scroll">
+    <table class="csv-table">
+      <thead><tr><th class="row-number" scope="col">#</th>{{range .Headings}}<th scope="col">{{.}}</th>{{end}}</tr></thead>
+      <tbody>{{range $rowIndex, $row := .Rows}}<tr><th class="row-number" scope="row">{{inc $rowIndex}}</th>{{range $row}}<td>{{.}}</td>{{end}}</tr>{{end}}</tbody>
+    </table>
+  </div>
+</section>`

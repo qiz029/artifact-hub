@@ -1,14 +1,14 @@
 # Artifact Hub
 
-Artifact Hub 是一个可自托管的 HTML / Markdown artifact 仓库。用户可以创建 collection、上传 artifact，并获得稳定访问地址。Artifact 的内容和元数据一经创建便不可修改，只能删除后重新创建。
+Artifact Hub 是一个可自托管的 HTML、Markdown、JSON 与 CSV artifact 仓库。用户可以创建 collection、上传 artifact，并获得稳定访问地址。Artifact 的内容和元数据一经创建便不可修改，只能删除后重新创建。
 
 ## 功能与安全边界
 
 - **Immutable**：API 不提供 update 路由，Postgres trigger 也会拒绝任何 `UPDATE artifacts`。
 - **可删除**：删除 artifact 会同时删除内容和元数据。
 - **完整元数据**：记录 title、description、tags、自定义 JSON、SHA-256、文件大小、原始文件名和 MIME type。
-- **适合阅读的独立页**：Markdown 的公开地址会渲染为带完整排版的阅读页，支持 GFM、Mermaid 图、KaTeX 公式、代码块复制，以及保存在当前设备上的字体、字号和行距设置；内嵌 HTML 不会执行。HTML artifact 仍在 sandboxed iframe 中原样展示，独立地址也带 CSP sandbox。
-- **单文件限制**：仅支持 `.html`、`.htm`、`.md`、`.markdown`，最大 10 MB。
+- **适合阅读的独立页**：Markdown 的公开地址会渲染为带完整排版的阅读页，支持 GFM、Mermaid 图、KaTeX 公式、代码块复制，以及保存在当前设备上的字体、字号和行距设置；JSON 会格式化并高亮显示，CSV 会生成带粘性表头和行号的数据表。内嵌内容不会执行。HTML artifact 仍在 sandboxed iframe 中原样展示，独立地址也带 CSP sandbox。
+- **单文件限制**：支持 `.html`、`.htm`、`.md`、`.markdown`、`.json`、`.csv`，最大 10 MB；JSON/CSV 上传时会校验格式，CSV 必须使用 UTF-8 编码。
 
 > [!WARNING]
 > 当前版本没有内建账号、登录和权限控制。任何能访问服务的人都可以浏览、创建和删除数据。不要直接把 `8080` 端口暴露到公网；生产部署应放在 VPN、Cloudflare Access、Tailscale，或带认证的反向代理后面。
@@ -25,7 +25,7 @@ Dockerfile                前后端多阶段生产镜像
 docker-compose.yml        Artifact Hub + Postgres 编排
 ```
 
-Go 服务使用标准库 `net/http` 和 `pgx`。Artifact 内容以 `bytea` 与元数据一起存入 Postgres，因此数据库备份就是完整备份。当前设计适合 10 MB 以内的 HTML / Markdown；未来可以在保持 API 不变的情况下把内容层迁移到 S3-compatible object storage。
+Go 服务使用标准库 `net/http` 和 `pgx`。Artifact 内容以 `bytea` 与元数据一起存入 Postgres，因此数据库备份就是完整备份。当前设计适合 10 MB 以内的 HTML、Markdown、JSON 与 CSV；未来可以在保持 API 不变的情况下把内容层迁移到 S3-compatible object storage。
 
 ## 推荐部署架构
 

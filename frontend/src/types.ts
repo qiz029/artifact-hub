@@ -15,7 +15,7 @@ export type Artifact = {
   slug: string
   title: string
   description: string
-  type: 'html' | 'markdown'
+  type: 'html' | 'markdown' | 'json' | 'csv'
   mediaType: string
   originalFilename: string
   sizeBytes: number

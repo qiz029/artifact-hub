@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -333,6 +335,30 @@ func writeArtifactContent(w http.ResponseWriter, r *http.Request, artifact artif
 		mediaType = "text/html"
 		cacheControl = "no-cache"
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self' data: https: http:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
+	} else if strings.HasPrefix(r.URL.Path, "/a/") && strings.HasPrefix(mediaType, "application/json") {
+		page, err := renderJSONPage(content, artifact.title, safeFilename(artifact.filename))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to render JSON page")
+			return
+		}
+		content = page
+		renderedHash := sha256.Sum256(content)
+		etag = `"sha256-` + hex.EncodeToString(renderedHash[:]) + `"`
+		mediaType = "text/html"
+		cacheControl = "no-cache"
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
+	} else if strings.HasPrefix(r.URL.Path, "/a/") && strings.HasPrefix(mediaType, "text/csv") {
+		page, err := renderCSVPage(content, artifact.title, safeFilename(artifact.filename))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to render CSV page")
+			return
+		}
+		content = page
+		renderedHash := sha256.Sum256(content)
+		etag = `"sha256-` + hex.EncodeToString(renderedHash[:]) + `"`
+		mediaType = "text/html"
+		cacheControl = "no-cache"
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
 	}
 	w.Header().Set("Content-Type", mediaType+"; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", safeFilename(artifact.filename)))
@@ -592,8 +618,27 @@ func artifactFormat(filename string, content []byte) (string, string, error) {
 		return "html", "text/html", nil
 	case ".md", ".markdown":
 		return "markdown", "text/markdown", nil
+	case ".json":
+		if !json.Valid(content) {
+			return "", "", fmt.Errorf("JSON artifact must contain valid JSON")
+		}
+		return "json", "application/json", nil
+	case ".csv":
+		if !utf8.Valid(content) {
+			return "", "", fmt.Errorf("CSV artifact must be UTF-8 encoded")
+		}
+		reader := csv.NewReader(bytes.NewReader(content))
+		reader.FieldsPerRecord = -1
+		records, err := reader.ReadAll()
+		if err != nil {
+			return "", "", fmt.Errorf("CSV artifact must contain valid CSV: %w", err)
+		}
+		if len(records) == 0 {
+			return "", "", fmt.Errorf("CSV artifact must contain at least one record")
+		}
+		return "csv", "text/csv", nil
 	default:
-		return "", "", fmt.Errorf("only .html, .htm, .md, and .markdown files are supported")
+		return "", "", fmt.Errorf("only HTML, Markdown, JSON, and CSV files are supported")
 	}
 }
 
