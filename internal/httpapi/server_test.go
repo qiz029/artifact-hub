@@ -306,7 +306,7 @@ func TestWriteArtifactContentRendersCSVPublicPage(t *testing.T) {
 		`<th class="row-number" scope="row">2</th>`, "&lt;script&gt;alert(1)&lt;/script&gt;",
 		"max-height: min(72vh, 900px)", `class="csv-column-highlight-rules"`,
 		`.csv-table:has(tr > :nth-child(2):hover) tr > :nth-child(2)`,
-		`.csv-table thead th:nth-child(2), .csv-table tbody td:first-child { position: sticky; left: 54px;`,
+		`.csv-table thead th:nth-child(2), .csv-table tbody td:nth-child(2) { position: sticky; left: 54px;`,
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Errorf("rendered CSV page missing %q", fragment)

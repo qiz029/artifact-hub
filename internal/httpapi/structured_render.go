@@ -490,10 +490,10 @@ const structuredPageHTML = `<!doctype html>
     .csv-table tbody tr:hover td, .csv-table tbody tr:hover th { background: #f3f1fb; }
     .csv-table .row-number { position: sticky; left: 0; z-index: 1; width: 54px; min-width: 54px; color: #99959c; background: #f7f6f2; border-right-color: #dedbd3; font-weight: 500; text-align: right; user-select: none; }
     .csv-table thead .row-number { z-index: 4; color: #777181; background: #e7e4f1; }
-    .csv-table thead th:nth-child(2), .csv-table tbody td:first-child { position: sticky; left: 54px; z-index: 2; background: #fff; box-shadow: 8px 0 14px -12px rgba(41,37,55,.75); }
+    .csv-table thead th:nth-child(2), .csv-table tbody td:nth-child(2) { position: sticky; left: 54px; z-index: 2; background: #fff; box-shadow: 8px 0 14px -12px rgba(41,37,55,.75); }
     .csv-table thead th:nth-child(2) { z-index: 3; background: #efedf8; }
-    .csv-table tbody tr:nth-child(even) td:first-child { background: #faf9f6; }
-    .csv-table tbody tr:hover td:first-child { background: #f3f1fb; }
+    .csv-table tbody tr:nth-child(even) td:nth-child(2) { background: #faf9f6; }
+    .csv-table tbody tr:hover td:nth-child(2) { background: #f3f1fb; }
     .page-footer { margin-top: 22px; color: #8b867c; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; text-align: center; text-transform: uppercase; letter-spacing: .09em; }
     @media (max-width: 700px) {
       .page-shell { width: 100%; padding: 0; }
