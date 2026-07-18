@@ -6,3 +6,5 @@ design
 frontend/node_modules
 frontend/dist
 frontend/*.tsbuildinfo
+frontend/public/markdown-assets/mermaid.min.js
+frontend/public/markdown-assets/katex
