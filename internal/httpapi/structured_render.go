@@ -6,7 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"strings"
+	"unicode/utf8"
+)
+
+const (
+	maxCSVPreviewRows    = 1000
+	maxCSVPreviewColumns = 100
+	maxCSVPreviewBytes   = 1 << 20
 )
 
 var (
@@ -67,51 +75,92 @@ func jsonSummary(value any) string {
 
 func renderCSVPage(content []byte, title, filename string) ([]byte, error) {
 	reader := csv.NewReader(bytes.NewReader(content))
-	reader.FieldsPerRecord = -1
-	records, err := reader.ReadAll()
+	headingsRecord, err := reader.Read()
 	if err != nil {
 		return nil, fmt.Errorf("parse CSV: %w", err)
 	}
-	if len(records) == 0 {
-		return nil, fmt.Errorf("parse CSV: no records")
+
+	columnCount := len(headingsRecord)
+	previewColumns := min(columnCount, maxCSVPreviewColumns)
+	remainingBytes := maxCSVPreviewBytes
+	contentClipped := false
+	headings := make([]string, previewColumns)
+	for index, heading := range headingsRecord[:previewColumns] {
+		if index == 0 {
+			heading = strings.TrimPrefix(heading, "\ufeff")
+		}
+		if strings.TrimSpace(heading) == "" {
+			heading = fmt.Sprintf("Column %d", index+1)
+		}
+		headings[index], contentClipped = previewCSVValue(heading, &remainingBytes, contentClipped)
 	}
 
-	columnCount := 0
-	for _, record := range records {
-		if len(record) > columnCount {
-			columnCount = len(record)
+	rows := make([][]string, 0, min(maxCSVPreviewRows, 128))
+	totalRows := 0
+	for {
+		record, readErr := reader.Read()
+		if readErr == io.EOF {
+			break
 		}
-	}
-	headings := make([]string, columnCount)
-	copy(headings, records[0])
-	if len(headings) > 0 {
-		headings[0] = strings.TrimPrefix(headings[0], "\ufeff")
-	}
-	for index := range headings {
-		if strings.TrimSpace(headings[index]) == "" {
-			headings[index] = fmt.Sprintf("Column %d", index+1)
+		if readErr != nil {
+			return nil, fmt.Errorf("parse CSV: %w", readErr)
 		}
-	}
-	rows := make([][]string, 0, len(records)-1)
-	for _, record := range records[1:] {
-		row := make([]string, columnCount)
-		copy(row, record)
+		totalRows++
+		if len(rows) >= maxCSVPreviewRows || remainingBytes == 0 {
+			continue
+		}
+		row := make([]string, previewColumns)
+		for index, value := range record[:previewColumns] {
+			row[index], contentClipped = previewCSVValue(value, &remainingBytes, contentClipped)
+			if remainingBytes == 0 {
+				break
+			}
+		}
 		rows = append(rows, row)
 	}
+	notice := csvPreviewNotice(totalRows, len(rows), columnCount, previewColumns, contentClipped)
 
 	var table bytes.Buffer
 	if err := csvTableTmpl.Execute(&table, struct {
 		Headings []string
 		Rows     [][]string
-	}{Headings: headings, Rows: rows}); err != nil {
+		Notice   string
+	}{Headings: headings, Rows: rows, Notice: notice}); err != nil {
 		return nil, fmt.Errorf("render CSV table: %w", err)
 	}
 
 	return renderStructuredPage(structuredPageData{
 		Title: title, Filename: filename, Kind: "CSV",
-		Summary: fmt.Sprintf("%d data rows · %d columns", len(rows), columnCount),
+		Summary: fmt.Sprintf("%d data rows · %d columns", totalRows, columnCount),
 		Content: template.HTML(table.String()),
 	})
+}
+
+func previewCSVValue(value string, remainingBytes *int, alreadyClipped bool) (string, bool) {
+	if len(value) <= *remainingBytes {
+		*remainingBytes -= len(value)
+		return value, alreadyClipped
+	}
+	limit := *remainingBytes
+	for limit > 0 && !utf8.ValidString(value[:limit]) {
+		limit--
+	}
+	*remainingBytes = 0
+	return value[:limit] + "…", true
+}
+
+func csvPreviewNotice(totalRows, previewRows, totalColumns, previewColumns int, contentClipped bool) string {
+	parts := make([]string, 0, 3)
+	if previewRows < totalRows {
+		parts = append(parts, fmt.Sprintf("Showing first %d of %d data rows", previewRows, totalRows))
+	}
+	if previewColumns < totalColumns {
+		parts = append(parts, fmt.Sprintf("Showing first %d of %d columns", previewColumns, totalColumns))
+	}
+	if contentClipped {
+		parts = append(parts, "Some long cells were shortened")
+	}
+	return strings.Join(parts, " · ")
 }
 
 func highlightJSONLine(line string) string {
@@ -202,7 +251,8 @@ const structuredPageHTML = `<!doctype html>
     .json-number { color: #e9b982; }
     .json-boolean { color: #c6a7ef; }
     .json-null { color: #7f828d; font-style: italic; }
-    .table-scroll { max-width: 100%; overflow: auto; background: #fff; }
+    .preview-note { margin: 0; padding: 10px 15px; color: #716c62; background: #fff9e8; border-bottom: 1px solid #ebe4cf; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .table-scroll { max-width: 100%; max-height: min(72vh, 900px); overflow: auto; background: #fff; }
     .csv-table { width: 100%; min-width: max-content; border-spacing: 0; border-collapse: separate; color: #32333a; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
     .csv-table th, .csv-table td { max-width: 520px; padding: 11px 14px; overflow-wrap: anywhere; border-right: 1px solid #e8e6e0; border-bottom: 1px solid #e8e6e0; text-align: left; vertical-align: top; white-space: pre-wrap; }
     .csv-table thead th { position: sticky; top: 0; z-index: 2; color: #4a4657; background: #efedf8; border-bottom-color: #d8d4e8; font-weight: 750; letter-spacing: .01em; }
@@ -240,6 +290,7 @@ const structuredPageHTML = `<!doctype html>
 
 const csvTableHTML = `<section class="data-card csv-card">
   <header class="card-bar"><span>Tabular preview</span><strong>First row used as headings</strong></header>
+  {{if .Notice}}<p class="preview-note">{{.Notice}}</p>{{end}}
   <div class="table-scroll">
     <table class="csv-table">
       <thead><tr><th class="row-number" scope="col">#</th>{{range .Headings}}<th scope="col">{{.}}</th>{{end}}</tr></thead>

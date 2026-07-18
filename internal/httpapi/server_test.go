@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -48,6 +49,7 @@ func TestArtifactFormatRejectsMalformedStructuredData(t *testing.T) {
 	}{
 		{filename: "broken.json", content: `{"missing":`},
 		{filename: "broken.csv", content: "name,notes\nTodd,\"unterminated\n"},
+		{filename: "ragged.csv", content: "name,status\nTodd\nCasey,ready,extra\n"},
 		{filename: "blank.csv", content: "\n"},
 	}
 	for _, test := range tests {
@@ -57,6 +59,14 @@ func TestArtifactFormatRejectsMalformedStructuredData(t *testing.T) {
 				t.Fatal("artifactFormat() accepted malformed structured data")
 			}
 		})
+	}
+}
+
+func TestArtifactFormatRejectsInvalidUTF8JSON(t *testing.T) {
+	t.Parallel()
+	content := []byte{'{', '"', 'v', 'a', 'l', 'u', 'e', '"', ':', '"', 0xff, '"', '}'}
+	if _, _, err := artifactFormat("invalid.json", content); err == nil {
+		t.Fatal("artifactFormat() accepted JSON containing invalid UTF-8")
 	}
 }
 
@@ -140,6 +150,9 @@ func TestWriteArtifactContentRendersMarkdownPublicPage(t *testing.T) {
 	response := recorder.Result()
 	if got := response.Header.Get("Content-Type"); got != "text/html; charset=utf-8" {
 		t.Fatalf("Content-Type = %q, want rendered HTML", got)
+	}
+	if got := response.Header.Get("Content-Disposition"); !strings.Contains(got, `filename="release-notes.html"`) {
+		t.Fatalf("Content-Disposition = %q, want rendered HTML filename", got)
 	}
 	if got := response.Header.Get("Cache-Control"); got != "no-cache" {
 		t.Fatalf("Cache-Control = %q, want rendered Markdown pages to revalidate", got)
@@ -237,6 +250,9 @@ func TestWriteArtifactContentRendersJSONPublicPage(t *testing.T) {
 	if got := response.Header.Get("Content-Type"); got != "text/html; charset=utf-8" {
 		t.Fatalf("Content-Type = %q, want rendered HTML", got)
 	}
+	if got := response.Header.Get("Content-Disposition"); !strings.Contains(got, `filename="results.html"`) {
+		t.Fatalf("Content-Disposition = %q, want rendered HTML filename", got)
+	}
 	body := recorder.Body.String()
 	for _, fragment := range []string{
 		"Evaluation results", "results.json", "JSON", "5 top-level fields",
@@ -278,6 +294,7 @@ func TestWriteArtifactContentRendersCSVPublicPage(t *testing.T) {
 		"Evaluation trials", "trials.csv", "CSV", "2 data rows · 3 columns",
 		`class="csv-table"`, `<th scope="col">status</th>`, `<td>Todd</td>`,
 		`<th class="row-number" scope="row">2</th>`, "&lt;script&gt;alert(1)&lt;/script&gt;",
+		"max-height: min(72vh, 900px)",
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Errorf("rendered CSV page missing %q", fragment)
@@ -285,6 +302,29 @@ func TestWriteArtifactContentRendersCSVPublicPage(t *testing.T) {
 	}
 	if strings.Contains(body, "<script>alert(1)</script>") {
 		t.Fatal("rendered CSV page included executable artifact content")
+	}
+}
+
+func TestWriteArtifactContentLimitsCSVPreview(t *testing.T) {
+	t.Parallel()
+	var csvContent strings.Builder
+	csvContent.WriteString("case,status\n")
+	for index := 1; index <= maxCSVPreviewRows+2; index++ {
+		fmt.Fprintf(&csvContent, "case-%04d,ready\n", index)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/a/11111111-1111-1111-1111-111111111111/large", nil)
+	recorder := httptest.NewRecorder()
+	writeArtifactContent(recorder, req, artifactContent{
+		content: []byte(csvContent.String()), mediaType: "text/csv", filename: "large.csv", title: "Large table", hash: "large123",
+	})
+
+	body := recorder.Body.String()
+	wantNotice := fmt.Sprintf("Showing first %d of %d data rows", maxCSVPreviewRows, maxCSVPreviewRows+2)
+	if !strings.Contains(body, wantNotice) {
+		t.Fatalf("rendered CSV page missing preview notice %q", wantNotice)
+	}
+	if strings.Contains(body, fmt.Sprintf("case-%04d", maxCSVPreviewRows+1)) {
+		t.Fatal("rendered CSV page included rows beyond the preview limit")
 	}
 }
 
@@ -313,5 +353,24 @@ func TestWriteArtifactContentKeepsStructuredAPIRaw(t *testing.T) {
 				t.Fatalf("API body changed: %q", got)
 			}
 		})
+	}
+}
+
+func TestWriteArtifactContentRevalidatesStructuredPageBeforeRendering(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest(http.MethodGet, "/a/11111111-1111-1111-1111-111111111111/results", nil)
+	etag := structuredPageETag("raw123", "application/json", "Results", "results.json")
+	req.Header.Set("If-None-Match", etag)
+	recorder := httptest.NewRecorder()
+
+	writeArtifactContent(recorder, req, artifactContent{
+		content: []byte(`{"malformed":`), mediaType: "application/json", filename: "results.json", title: "Results", hash: "raw123",
+	})
+
+	if got := recorder.Code; got != http.StatusNotModified {
+		t.Fatalf("status = %d, want 304 before structured content rendering", got)
+	}
+	if got := recorder.Header().Get("ETag"); got != etag {
+		t.Fatalf("ETag = %q, want %q", got, etag)
 	}
 }
