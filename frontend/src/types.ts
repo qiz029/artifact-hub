@@ -8,10 +8,20 @@ export type Collection = {
   createdAt: string
 }
 
+export type ArtifactRef = {
+  artifactId: string
+  seriesId: string
+  slug: string
+  title: string
+  collectionId: string
+}
+
 export type Artifact = {
   id: string
   collectionId: string
   collectionName?: string
+  seriesId: string
+  version: number
   slug: string
   title: string
   description: string
@@ -25,4 +35,6 @@ export type Artifact = {
   createdAt: string
   contentUrl: string
   publicUrl: string
+  links?: ArtifactRef[]
+  backlinks?: ArtifactRef[]
 }

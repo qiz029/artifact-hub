@@ -1,10 +1,12 @@
 # Artifact Hub
 
-Artifact Hub 是一个可自托管的 HTML、Markdown、JSON、JSONL 与 CSV artifact 仓库。用户可以创建 collection、上传 artifact，并获得稳定访问地址。Artifact 的内容和元数据一经创建便不可修改，只能删除后重新创建。
+Artifact Hub 是一个可自托管的 HTML、Markdown、JSON、JSONL 与 CSV artifact 仓库。用户可以创建 collection、上传 artifact，并获得稳定访问地址。Artifact 的每个版本一经创建便不可修改，只能删除；上传时声明已有文档的 slug 即可为它发布新版本。
 
 ## 功能与安全边界
 
 - **Immutable**：API 不提供 update 路由，Postgres trigger 也会拒绝任何 `UPDATE artifacts`。
+- **版本化**：上传时在表单中声明 `slug`（可选）：slug 已被占用时，内容不同的上传会成为该 series 下的新版本（version 递增）；内容与最新版本相同（按 SHA-256 判断）时是幂等重放，不生成新版本，直接返回现有版本（HTTP 200），仅元数据/title/tags 的差异不会创建版本。不填 slug 则总是创建新文档。公开地址 `/a/{id}/{slug}` 永远钉住当时上传的那个版本。列表接口只展示每个 series 的最新版本，可通过 `GET /api/artifacts/{id}/versions` 查看全部历史版本。
+- **双向链接**：上传时自动扫描内容中对其他 artifact 公开地址（`/a/{id}`）的引用并记录为链接；链接指向目标文档的 series，因此目标发布新版本后引用自动解析到最新版，不会过时。目标文档的详情响应（`backlinks` 字段）会自动出现反向链接，无需任何手工操作；链接随内容变化自动重建，没有单独的链接管理接口。
 - **可删除**：删除 artifact 会同时删除内容和元数据。
 - **完整元数据**：记录 title、description、tags、自定义 JSON、SHA-256、文件大小、原始文件名和 MIME type。
 - **适合阅读的独立页**：Markdown 的公开地址会渲染为带完整排版的阅读页，支持 GFM、Mermaid 图、KaTeX 公式、代码块复制，以及保存在当前设备上的字体、字号和行距设置；JSON 会格式化、高亮并允许逐层折叠对象和数组，JSONL 会按 record 编号展示，CSV 会生成支持横行与纵列 hover 高亮的数据表，滚动时固定表头、行号和第一列数据。内嵌内容不会执行。HTML artifact 仍在 sandboxed iframe 中原样展示，独立地址也带 CSP sandbox。
@@ -466,15 +468,16 @@ npm --prefix frontend run dev
 | --- | --- | --- |
 | `GET` | `/api/collections` | Collection 列表与 artifact 数量 |
 | `POST` | `/api/collections` | 创建 collection |
-| `GET` | `/api/collections/{id}/artifacts` | 浏览或搜索 artifact |
-| `POST` | `/api/collections/{id}/artifacts` | Multipart 上传，文件字段为 `file` |
-| `GET` | `/api/artifacts/{id}` | 获取完整元数据 |
+| `GET` | `/api/collections/{id}/artifacts` | 浏览或搜索 artifact（每个 series 只返回最新版本） |
+| `POST` | `/api/collections/{id}/artifacts` | Multipart 上传，文件字段为 `file`；声明已有 `slug` 可发布新版本，内容相同则幂等返回现有版本 |
+| `GET` | `/api/artifacts/{id}` | 获取完整元数据（含 `seriesId`、`version` 与 `links`/`backlinks`） |
+| `GET` | `/api/artifacts/{id}/versions` | 列出该 artifact 所在 series 的全部版本（新的在前） |
 | `GET` | `/api/artifacts/{id}/content` | 获取原始内容 |
 | `DELETE` | `/api/artifacts/{id}` | 删除 artifact |
 | `GET` | `/a/{id}/{slug}` | 新生成的可读稳定公开地址 |
 | `GET` | `/a/{id}` | 向后兼容的稳定公开地址 |
 
-上传接口还接受 `title`、`description`、逗号分隔的 `tags`，以及 JSON object 格式的 `metadata`。
+上传接口还接受 `title`、`description`、逗号分隔的 `tags`、JSON object 格式的 `metadata`，以及可选的 `slug`（小写字母、数字、连字符，最长 80 字符）。
 
 ## 验证代码
 

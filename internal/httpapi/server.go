@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/csv"
 	"encoding/hex"
@@ -31,6 +32,8 @@ const maxArtifactSize = 10 << 20
 
 var (
 	slugInvalid      = regexp.MustCompile(`[^a-z0-9]+`)
+	artifactSlug     = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,78}[a-z0-9])?$`)
+	artifactLinkRef  = regexp.MustCompile(`/a/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})`)
 	hexColor         = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
 	markdownParser   = goldmark.New(goldmark.WithExtensions(extension.GFM))
 	markdownPageTmpl = template.Must(template.New("markdown-page").Parse(markdownPageHTML))
@@ -64,6 +67,7 @@ func New(db *pgxpool.Pool, options Options) http.Handler {
 	mux.HandleFunc("GET /api/collections/{collectionID}/artifacts", s.listArtifacts)
 	mux.HandleFunc("POST /api/collections/{collectionID}/artifacts", s.createArtifact)
 	mux.HandleFunc("GET /api/artifacts/{artifactID}", s.getArtifact)
+	mux.HandleFunc("GET /api/artifacts/{artifactID}/versions", s.listArtifactVersions)
 	mux.HandleFunc("GET /api/artifacts/{artifactID}/content", s.getArtifactContent)
 	mux.HandleFunc("DELETE /api/artifacts/{artifactID}", s.deleteArtifact)
 	mux.HandleFunc("GET /a/{artifactID}/{slug}", s.getArtifactContent)
@@ -86,7 +90,7 @@ func (s *Server) listCollections(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := withTimeout(r, 5*time.Second)
 	defer cancel()
 	rows, err := s.db.Query(ctx, `
-		SELECT c.id, c.slug, c.name, c.description, c.color, count(a.id), c.created_at
+		SELECT c.id, c.slug, c.name, c.description, c.color, count(DISTINCT a.series_id), c.created_at
 		FROM collections c LEFT JOIN artifacts a ON a.collection_id = c.id
 		GROUP BY c.id ORDER BY c.created_at ASC`)
 	if err != nil {
@@ -154,13 +158,17 @@ func (s *Server) listArtifacts(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := withTimeout(r, 5*time.Second)
 	defer cancel()
 	rows, err := s.db.Query(ctx, `
-		SELECT a.id, a.collection_id, a.slug, a.title, a.description, a.artifact_type,
-		       a.media_type, a.original_filename, a.size_bytes, a.sha256, a.tags,
-		       a.metadata, a.created_at
-		FROM artifacts a
-		WHERE a.collection_id = $1
-		  AND ($2 = '' OR a.title ILIKE '%' || $2 || '%' OR a.description ILIKE '%' || $2 || '%' OR array_to_string(a.tags, ' ') ILIKE '%' || $2 || '%')
-		ORDER BY a.created_at DESC`, collectionID, query)
+		SELECT latest.id, latest.collection_id, latest.slug, latest.title, latest.description, latest.artifact_type,
+		       latest.media_type, latest.original_filename, latest.size_bytes, latest.sha256, latest.tags,
+		       latest.metadata, latest.created_at, latest.series_id, latest.version
+		FROM (
+			SELECT DISTINCT ON (a.series_id) a.*
+			FROM artifacts a
+			WHERE a.collection_id = $1
+			  AND ($2 = '' OR a.title ILIKE '%' || $2 || '%' OR a.description ILIKE '%' || $2 || '%' OR array_to_string(a.tags, ' ') ILIKE '%' || $2 || '%')
+			ORDER BY a.series_id, a.version DESC
+		) latest
+		ORDER BY latest.created_at DESC`, collectionID, query)
 	if err != nil {
 		writeDBError(w, err)
 		return
@@ -215,6 +223,11 @@ func (s *Server) createArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tags := parseTags(r.FormValue("tags"))
+	slug := strings.TrimSpace(r.FormValue("slug"))
+	if slug != "" && !artifactSlug.MatchString(slug) {
+		writeError(w, http.StatusBadRequest, "slug must be 1-80 characters of lowercase letters, digits, and hyphens, without leading or trailing hyphens")
+		return
+	}
 	metadata := json.RawMessage(strings.TrimSpace(r.FormValue("metadata")))
 	if len(metadata) == 0 {
 		metadata = json.RawMessage(`{}`)
@@ -231,17 +244,59 @@ func (s *Server) createArtifact(w http.ResponseWriter, r *http.Request) {
 		MediaType: mediaType, OriginalFilename: filepath.Base(header.Filename),
 		SizeBytes: int64(len(content)), SHA256: hex.EncodeToString(hash[:]), Tags: tags, Metadata: metadata,
 	}
-	artifact.Slug = uniqueSlug(title, artifact.ID)
 	ctx, cancel := withTimeout(r, 10*time.Second)
 	defer cancel()
-	err = s.db.QueryRow(ctx, `
+	if slug == "" {
+		// No declared slug: auto-generate one and always start a new series.
+		artifact.Slug = uniqueSlug(title, artifact.ID)
+		artifact.SeriesID = artifact.ID
+		artifact.Version = 1
+	} else {
+		artifact.Slug = slug
+		latest, latestErr := scanArtifact(s.db.QueryRow(ctx, `
+			SELECT a.id, a.collection_id, a.slug, a.title, a.description, a.artifact_type,
+			       a.media_type, a.original_filename, a.size_bytes, a.sha256, a.tags,
+			       a.metadata, a.created_at, a.series_id, a.version
+			FROM artifacts a
+			WHERE a.collection_id = $1 AND a.slug = $2
+			ORDER BY a.version DESC LIMIT 1`, collectionID, slug))
+		switch {
+		case errors.Is(latestErr, pgx.ErrNoRows):
+			// Declared slug not taken: start a new series with the slug verbatim.
+			artifact.SeriesID = artifact.ID
+			artifact.Version = 1
+		case latestErr != nil:
+			writeDBError(w, latestErr)
+			return
+		case latest.SHA256 == artifact.SHA256:
+			// Idempotent replay: identical content already exists as the latest
+			// version. Submitted metadata/tags/description differences are ignored.
+			s.addURLs(r, &latest)
+			writeJSON(w, http.StatusOK, latest)
+			return
+		default:
+			artifact.SeriesID = latest.SeriesID
+			artifact.Version = latest.Version + 1
+		}
+	}
+	// Concurrent uploads of the same slug race on version+1; the
+	// UNIQUE(collection_id, slug, version) constraint rejects the loser with
+	// 23505, which writeDBError surfaces as 409.
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	err = tx.QueryRow(ctx, `
 		INSERT INTO artifacts (id, collection_id, slug, title, description, artifact_type, media_type,
-		                       original_filename, content, size_bytes, sha256, tags, metadata)
-		SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13
+		                       original_filename, content, size_bytes, sha256, tags, metadata, series_id, version)
+		SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15
 		WHERE EXISTS (SELECT 1 FROM collections WHERE id = $2)
 		RETURNING created_at`, artifact.ID, artifact.CollectionID, artifact.Slug, artifact.Title,
 		artifact.Description, artifact.Type, artifact.MediaType, artifact.OriginalFilename,
-		content, artifact.SizeBytes, artifact.SHA256, artifact.Tags, artifact.Metadata).Scan(&artifact.CreatedAt)
+		content, artifact.SizeBytes, artifact.SHA256, artifact.Tags, artifact.Metadata,
+		artifact.SeriesID, artifact.Version).Scan(&artifact.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "collection not found")
 		return
@@ -250,8 +305,58 @@ func (s *Server) createArtifact(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
+	if err := replaceSeriesLinks(ctx, tx, artifact, content); err != nil {
+		writeDBError(w, err)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeDBError(w, err)
+		return
+	}
 	s.addURLs(r, &artifact)
 	writeJSON(w, http.StatusCreated, artifact)
+}
+
+// extractLinkedArtifactIDs scans raw content for references to other
+// artifacts' public URLs (/a/{uuid}) and returns the deduped artifact IDs.
+func extractLinkedArtifactIDs(content []byte) []uuid.UUID {
+	matches := artifactLinkRef.FindAllSubmatch(content, -1)
+	seen := make(map[uuid.UUID]struct{}, len(matches))
+	ids := make([]uuid.UUID, 0, len(matches))
+	for _, match := range matches {
+		id, err := uuid.Parse(string(match[1]))
+		if err != nil {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// replaceSeriesLinks rebuilds the outgoing links of an artifact series from
+// the freshly uploaded content: links recorded for superseded versions are
+// dropped first so read queries only ever see the latest version's link set.
+func replaceSeriesLinks(ctx context.Context, tx pgx.Tx, artifact Artifact, content []byte) error {
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM artifact_links
+		WHERE source_artifact_id IN (SELECT id FROM artifacts WHERE series_id = $1)`, artifact.SeriesID); err != nil {
+		return err
+	}
+	targetIDs := extractLinkedArtifactIDs(content)
+	if len(targetIDs) == 0 {
+		return nil
+	}
+	// Unknown targets and links back into the artifact's own series are skipped.
+	_, err := tx.Exec(ctx, `
+		INSERT INTO artifact_links (source_artifact_id, target_series_id)
+		SELECT $1, a.series_id FROM artifacts a
+		WHERE a.id = ANY($2) AND a.series_id <> $3
+		ON CONFLICT DO NOTHING`, artifact.ID, targetIDs, artifact.SeriesID)
+	return err
 }
 
 func (s *Server) getArtifact(w http.ResponseWriter, r *http.Request) {
@@ -264,12 +369,14 @@ func (s *Server) getArtifact(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	row := s.db.QueryRow(ctx, `
 		SELECT a.id, a.collection_id, c.name, a.slug, a.title, a.description, a.artifact_type,
-		       a.media_type, a.original_filename, a.size_bytes, a.sha256, a.tags, a.metadata, a.created_at
+		       a.media_type, a.original_filename, a.size_bytes, a.sha256, a.tags, a.metadata, a.created_at,
+		       a.series_id, a.version
 		FROM artifacts a JOIN collections c ON c.id = a.collection_id WHERE a.id = $1`, artifactID)
 	var artifact Artifact
 	err = row.Scan(&artifact.ID, &artifact.CollectionID, &artifact.CollectionName, &artifact.Slug, &artifact.Title,
 		&artifact.Description, &artifact.Type, &artifact.MediaType, &artifact.OriginalFilename,
-		&artifact.SizeBytes, &artifact.SHA256, &artifact.Tags, &artifact.Metadata, &artifact.CreatedAt)
+		&artifact.SizeBytes, &artifact.SHA256, &artifact.Tags, &artifact.Metadata, &artifact.CreatedAt,
+		&artifact.SeriesID, &artifact.Version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "artifact not found")
 		return
@@ -278,8 +385,114 @@ func (s *Server) getArtifact(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
+	artifact.Links, err = s.seriesLinks(ctx, artifact.SeriesID)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+	artifact.Backlinks, err = s.seriesBacklinks(ctx, artifact.SeriesID)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
 	s.addURLs(r, &artifact)
 	writeJSON(w, http.StatusOK, artifact)
+}
+
+// seriesLinks returns the outgoing links of a series, with each target series
+// resolved to its latest version.
+func (s *Server) seriesLinks(ctx context.Context, seriesID uuid.UUID) ([]ArtifactRef, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT DISTINCT ON (l.target_series_id) t.id, t.series_id, t.slug, t.title, t.collection_id
+		FROM artifact_links l
+		JOIN LATERAL (
+			SELECT a.id, a.series_id, a.slug, a.title, a.collection_id
+			FROM artifacts a WHERE a.series_id = l.target_series_id
+			ORDER BY a.version DESC LIMIT 1
+		) t ON true
+		WHERE l.source_artifact_id IN (SELECT id FROM artifacts WHERE series_id = $1)
+		ORDER BY l.target_series_id, t.title`, seriesID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanArtifactRefs(rows)
+}
+
+// seriesBacklinks returns the incoming links of a series, deduped by source
+// series and with each source resolved to the latest version of its series.
+func (s *Server) seriesBacklinks(ctx context.Context, seriesID uuid.UUID) ([]ArtifactRef, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT DISTINCT ON (src.series_id) t.id, t.series_id, t.slug, t.title, t.collection_id
+		FROM artifact_links l
+		JOIN artifacts src ON src.id = l.source_artifact_id
+		JOIN LATERAL (
+			SELECT a.id, a.series_id, a.slug, a.title, a.collection_id
+			FROM artifacts a WHERE a.series_id = src.series_id
+			ORDER BY a.version DESC LIMIT 1
+		) t ON true
+		WHERE l.target_series_id = $1
+		ORDER BY src.series_id, t.title`, seriesID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanArtifactRefs(rows)
+}
+
+func scanArtifactRefs(rows pgx.Rows) ([]ArtifactRef, error) {
+	refs := make([]ArtifactRef, 0)
+	for rows.Next() {
+		var ref ArtifactRef
+		if err := rows.Scan(&ref.ArtifactID, &ref.SeriesID, &ref.Slug, &ref.Title, &ref.CollectionID); err != nil {
+			return nil, err
+		}
+		refs = append(refs, ref)
+	}
+	return refs, rows.Err()
+}
+
+func (s *Server) listArtifactVersions(w http.ResponseWriter, r *http.Request) {
+	artifactID, err := uuid.Parse(r.PathValue("artifactID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid artifact id")
+		return
+	}
+	ctx, cancel := withTimeout(r, 5*time.Second)
+	defer cancel()
+	var seriesID uuid.UUID
+	err = s.db.QueryRow(ctx, "SELECT series_id FROM artifacts WHERE id = $1", artifactID).Scan(&seriesID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "artifact not found")
+		return
+	}
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT a.id, a.collection_id, a.slug, a.title, a.description, a.artifact_type,
+		       a.media_type, a.original_filename, a.size_bytes, a.sha256, a.tags,
+		       a.metadata, a.created_at, a.series_id, a.version
+		FROM artifacts a
+		WHERE a.series_id = $1
+		ORDER BY a.version DESC`, seriesID)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+	defer rows.Close()
+	artifacts := make([]Artifact, 0)
+	for rows.Next() {
+		artifact, err := scanArtifact(rows)
+		if err != nil {
+			writeDBError(w, err)
+			return
+		}
+		s.addURLs(r, &artifact)
+		artifacts = append(artifacts, artifact)
+	}
+	writeJSON(w, http.StatusOK, artifacts)
 }
 
 func (s *Server) getArtifactContent(w http.ResponseWriter, r *http.Request) {
@@ -588,13 +801,24 @@ func (s *Server) deleteArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := withTimeout(r, 5*time.Second)
 	defer cancel()
-	result, err := s.db.Exec(ctx, "DELETE FROM artifacts WHERE id = $1", artifactID)
+	var seriesID uuid.UUID
+	err = s.db.QueryRow(ctx, "DELETE FROM artifacts WHERE id = $1 RETURNING series_id", artifactID).Scan(&seriesID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "artifact not found")
+		return
+	}
 	if err != nil {
 		writeDBError(w, err)
 		return
 	}
-	if result.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "artifact not found")
+	// Links FROM the deleted version are removed by ON DELETE CASCADE. When the
+	// last version of the series is gone, inbound links to it dangle (no FK is
+	// possible on series_id), so clean them up here.
+	if _, err := s.db.Exec(ctx, `
+		DELETE FROM artifact_links
+		WHERE target_series_id = $1
+		  AND NOT EXISTS (SELECT 1 FROM artifacts WHERE series_id = $1)`, seriesID); err != nil {
+		writeDBError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -630,7 +854,8 @@ func scanArtifact(row interface{ Scan(...any) error }) (Artifact, error) {
 	var artifact Artifact
 	err := row.Scan(&artifact.ID, &artifact.CollectionID, &artifact.Slug, &artifact.Title,
 		&artifact.Description, &artifact.Type, &artifact.MediaType, &artifact.OriginalFilename,
-		&artifact.SizeBytes, &artifact.SHA256, &artifact.Tags, &artifact.Metadata, &artifact.CreatedAt)
+		&artifact.SizeBytes, &artifact.SHA256, &artifact.Tags, &artifact.Metadata, &artifact.CreatedAt,
+		&artifact.SeriesID, &artifact.Version)
 	return artifact, err
 }
 

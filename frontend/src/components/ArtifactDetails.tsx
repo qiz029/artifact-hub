@@ -1,18 +1,23 @@
 import { ArrowUpRight, Check, Clipboard, Hash, LockKeyhole, Trash2, X } from 'lucide-react'
-import type { Artifact } from '../types'
+import type { Artifact, ArtifactRef } from '../types'
 import { formatBytes } from '../lib/format'
 
 type ArtifactDetailsProps = {
   artifact: Artifact
+  versions: Artifact[]
   open: boolean
   copied: boolean
   onClose: () => void
   onCopy: () => void
   onDelete: () => void
+  onSelectVersion: (artifactId: string) => void
+  onOpenArtifact: (ref: ArtifactRef) => void
 }
 
-export function ArtifactDetails({ artifact, open, copied, onClose, onCopy, onDelete }: ArtifactDetailsProps) {
+export function ArtifactDetails({ artifact, versions, open, copied, onClose, onCopy, onDelete, onSelectVersion, onOpenArtifact }: ArtifactDetailsProps) {
   const metadata = Object.entries(artifact.metadata ?? {})
+  const links = artifact.links ?? []
+  const backlinks = artifact.backlinks ?? []
   const typeLabel = artifact.type === 'markdown' ? 'MD' : artifact.type.toUpperCase()
 
   return (
@@ -31,9 +36,37 @@ export function ArtifactDetails({ artifact, open, copied, onClose, onCopy, onDel
         <Detail label="Created" value={new Date(artifact.createdAt).toLocaleString('zh-CN')} />
       </section>
       <section className="details-section">
+        <div className="detail-label">版本</div>
+        <div className="detail-row"><span>当前版本</span><strong>v{artifact.version} · 共 {Math.max(versions.length, 1)} 个版本</strong></div>
+        {versions.length > 1 && (
+          <select className="version-select" value={artifact.id} onChange={(event) => onSelectVersion(event.target.value)} aria-label="切换版本">
+            {versions.map((version) => (
+              <option key={version.id} value={version.id}>v{version.version} · {new Date(version.createdAt).toLocaleString('zh-CN')}</option>
+            ))}
+          </select>
+        )}
+      </section>
+      <section className="details-section">
         <div className="detail-label">Tags</div>
         <div className="tag-cloud">{artifact.tags.length ? artifact.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>) : <span className="muted">没有标签</span>}</div>
       </section>
+      {(links.length > 0 || backlinks.length > 0) && (
+        <section className="details-section">
+          <div className="detail-label">链接</div>
+          {links.length > 0 && (
+            <div className="link-group">
+              <div className="link-group-label">引用了</div>
+              {links.map((ref) => <button type="button" className="link-ref" key={ref.artifactId} onClick={() => onOpenArtifact(ref)}>{ref.title}</button>)}
+            </div>
+          )}
+          {backlinks.length > 0 && (
+            <div className="link-group">
+              <div className="link-group-label">被引用于</div>
+              {backlinks.map((ref) => <button type="button" className="link-ref" key={ref.artifactId} onClick={() => onOpenArtifact(ref)}>{ref.title}</button>)}
+            </div>
+          )}
+        </section>
+      )}
       <section className="details-section checksum">
         <div className="detail-label"><Hash size={12} /> SHA-256 fingerprint</div>
         <code>{artifact.sha256}</code>

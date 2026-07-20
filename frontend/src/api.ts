@@ -21,6 +21,7 @@ export const api = {
   artifacts: (collectionId: string, query = '', signal?: AbortSignal) =>
     request<Artifact[]>(`/api/collections/${collectionId}/artifacts?q=${encodeURIComponent(query)}`, { signal }),
   artifact: (artifactId: string) => request<Artifact>(`/api/artifacts/${artifactId}`),
+  artifactVersions: (artifactId: string) => request<Artifact[]>(`/api/artifacts/${artifactId}/versions`),
   artifactContent: async (artifactId: string, signal?: AbortSignal) => {
     const response = await fetch(`/api/artifacts/${artifactId}/content`, { signal })
     if (!response.ok) throw new Error('无法读取 artifact 内容')

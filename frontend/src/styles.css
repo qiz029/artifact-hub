@@ -202,6 +202,13 @@ kbd { padding: 3px 5px; color: #6c6f7c; background: rgba(255,255,255,.04); borde
 .detail-label { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; color: #686b78; font: 500 9px DM Mono, monospace; letter-spacing: .07em; text-transform: uppercase; }
 .tag-cloud .tag { margin-bottom: 4px; }
 .muted { color: #626572; font-size: 10px; }
+.version-select { width: 100%; height: 30px; margin-top: 6px; padding: 0 8px; color: #c6c8d0; background: rgba(255,255,255,.035); border: 1px solid var(--border); border-radius: 7px; outline: 0; font: 10px DM Mono, monospace; cursor: pointer; }
+.version-select:focus { border-color: rgba(149,137,255,.55); }
+.link-group + .link-group { margin-top: 10px; }
+.link-group-label { margin-bottom: 5px; color: #6d707d; font-size: 10px; }
+.link-ref { display: block; width: 100%; padding: 6px 8px; overflow: hidden; color: #a5a7b1; background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 7px; font-size: 10.5px; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.link-ref + .link-ref { margin-top: 4px; }
+.link-ref:hover { color: #e5e6ea; border-color: rgba(149,137,255,.4); }
 .checksum code { display: block; overflow-wrap: anywhere; color: #858895; font: 9px/1.65 DM Mono, monospace; }
 .custom-metadata .detail-row { grid-template-columns: minmax(65px,.7fr) minmax(0,1.3fr); }
 .details-spacer { flex: 1; }
@@ -233,6 +240,7 @@ kbd { padding: 3px 5px; color: #6c6f7c; background: rgba(255,255,255,.04); borde
 .field input, .field textarea { width: 100%; padding: 10px 11px; color: #e5e6ea; background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.1); border-radius: 8px; outline: 0; font-size: 12px; resize: vertical; }
 .field input:focus, .field textarea:focus { border-color: rgba(149,137,255,.5); box-shadow: 0 0 0 3px rgba(120,107,242,.08); }
 .field input::placeholder, .field textarea::placeholder { color: #5f626e; }
+.field-hint { margin: -7px 0 15px; color: #626572; font-size: 9.5px; line-height: 1.6; }
 .code-input { font-family: DM Mono, monospace !important; font-size: 10px !important; line-height: 1.65; }
 .form-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 13px; }
 .color-picker { display: flex; gap: 11px; }

@@ -33,7 +33,7 @@ import { api } from './api'
 import { ArtifactDetails } from './components/ArtifactDetails'
 import { ArtifactModal, CollectionModal, DeleteArtifactModal } from './components/ArtifactModals'
 import { relativeTime } from './lib/format'
-import type { Artifact, Collection } from './types'
+import type { Artifact, ArtifactRef, Collection } from './types'
 
 type Modal = 'collection' | 'artifact' | null
 type MobileStage = 'collections' | 'artifacts' | 'detail'
@@ -54,6 +54,8 @@ function ArtifactTypeIcon({ type, size = 15 }: { type: Artifact['type']; size?: 
 function App() {
   const [collections, setCollections] = useState<Collection[]>([])
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
+  const [versions, setVersions] = useState<Artifact[]>([])
+  const [viewedVersion, setViewedVersion] = useState<Artifact | null>(null)
   const [collectionId, setCollectionId] = useState<string | null>(null)
   const [artifactId, setArtifactId] = useState<string | null>(null)
   const [markdown, setMarkdown] = useState('')
@@ -71,7 +73,9 @@ function App() {
   const [copied, setCopied] = useState(false)
 
   const selectedCollection = collections.find((item) => item.id === collectionId) ?? null
-  const selectedArtifact = artifacts.find((item) => item.id === artifactId) ?? null
+  const listedArtifact = artifacts.find((item) => item.id === artifactId) ?? null
+  // An older version is not part of the latest-per-series list; keep it separately.
+  const selectedArtifact = listedArtifact ?? (viewedVersion?.id === artifactId ? viewedVersion : null)
   const visibleCollections = collectionQuery
     ? collections.filter((item) => `${item.name} ${item.description}`.toLowerCase().includes(collectionQuery.toLowerCase()))
     : collections
@@ -123,6 +127,18 @@ function App() {
     })
     return () => controller.abort()
   }, [selectedArtifact?.id, selectedArtifact?.type])
+
+  useEffect(() => {
+    if (!selectedArtifact?.id) {
+      setVersions([])
+      return
+    }
+    let cancelled = false
+    api.artifactVersions(selectedArtifact.id)
+      .then((next) => { if (!cancelled) setVersions(next) })
+      .catch(() => { if (!cancelled) setVersions([]) })
+    return () => { cancelled = true }
+  }, [selectedArtifact?.id])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -196,6 +212,26 @@ function App() {
       setError(reason instanceof Error ? reason.message : '删除失败')
       return false
     }
+  }
+
+  const selectVersion = async (id: string) => {
+    if (id === artifactId) return
+    try {
+      const artifact = await api.artifact(id)
+      setViewedVersion(artifact)
+      setArtifactId(id)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '无法读取该版本')
+    }
+  }
+
+  // Linked artifacts may live in another collection; switch both selections.
+  const openArtifactRef = (ref: ArtifactRef) => {
+    setViewedVersion(null)
+    setDetailsOpen(false)
+    if (ref.collectionId !== collectionId) setCollectionId(ref.collectionId)
+    setArtifactId(ref.artifactId)
+    setMobileStage('detail')
   }
 
   const copyLink = async () => {
@@ -384,7 +420,7 @@ function App() {
       </main>
 
       {selectedArtifact && !fullscreen && detailsOpen && <button className="details-scrim" type="button" aria-label="关闭元数据" onClick={() => setDetailsOpen(false)} />}
-      {selectedArtifact && !fullscreen && <ArtifactDetails artifact={selectedArtifact} open={detailsOpen} copied={copied} onClose={() => setDetailsOpen(false)} onCopy={copyLink} onDelete={() => { setDetailsOpen(false); setDeleteConfirmOpen(true) }} />}
+      {selectedArtifact && !fullscreen && <ArtifactDetails artifact={selectedArtifact} versions={versions} open={detailsOpen} copied={copied} onClose={() => setDetailsOpen(false)} onCopy={copyLink} onDelete={() => { setDetailsOpen(false); setDeleteConfirmOpen(true) }} onSelectVersion={selectVersion} onOpenArtifact={openArtifactRef} />}
 
       {modal === 'collection' && <CollectionModal onClose={() => setModal(null)} onCreated={afterCollectionCreated} />}
       {modal === 'artifact' && selectedCollection && <ArtifactModal collection={selectedCollection} onClose={() => setModal(null)} onCreated={afterArtifactCreated} />}

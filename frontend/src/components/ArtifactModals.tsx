@@ -58,6 +58,7 @@ export function ArtifactModal({ collection, onClose, onCreated }: { collection: 
   const [description, setDescription] = useState('')
   const [tags, setTags] = useState('')
   const [metadata, setMetadata] = useState('{}')
+  const [slug, setSlug] = useState('')
   const [saving, setSaving] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [error, setError] = useState('')
@@ -88,6 +89,7 @@ export function ArtifactModal({ collection, onClose, onCreated }: { collection: 
     form.set('description', description)
     form.set('tags', tags)
     form.set('metadata', metadata)
+    if (slug.trim()) form.set('slug', slug.trim())
     setSaving(true)
     try { onCreated(await api.uploadArtifact(collection.id, form)) }
     catch (reason) { setError(reason instanceof Error ? reason.message : '上传失败'); setSaving(false) }
@@ -105,6 +107,8 @@ export function ArtifactModal({ collection, onClose, onCreated }: { collection: 
           <Field label="标签"><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="release, docs, v1" /></Field>
         </div>
         <Field label="描述"><input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="一句话说明这个 artifact" /></Field>
+        <Field label="Slug（可选）"><input value={slug} onChange={(event) => setSlug(event.target.value)} placeholder="留空则创建新文档" spellCheck={false} /></Field>
+        <p className="field-hint">要更新已有文档，填写它的 slug（小写字母、数字与连字符）；内容相同则不会生成新版本。</p>
         <details className="advanced-fields">
           <summary><span>高级元数据</span><small>JSON</small><ChevronDown size={14} /></summary>
           <div><Field label="自定义元数据（JSON）"><textarea className="code-input" rows={4} value={metadata} onChange={(event) => setMetadata(event.target.value)} spellCheck={false} /></Field></div>

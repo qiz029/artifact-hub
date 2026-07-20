@@ -17,10 +17,20 @@ type Collection struct {
 	CreatedAt     time.Time `json:"createdAt"`
 }
 
+type ArtifactRef struct {
+	ArtifactID   uuid.UUID `json:"artifactId"`
+	SeriesID     uuid.UUID `json:"seriesId"`
+	Slug         string    `json:"slug"`
+	Title        string    `json:"title"`
+	CollectionID uuid.UUID `json:"collectionId"`
+}
+
 type Artifact struct {
 	ID               uuid.UUID       `json:"id"`
 	CollectionID     uuid.UUID       `json:"collectionId"`
 	CollectionName   string          `json:"collectionName,omitempty"`
+	SeriesID         uuid.UUID       `json:"seriesId"`
+	Version          int             `json:"version"`
 	Slug             string          `json:"slug"`
 	Title            string          `json:"title"`
 	Description      string          `json:"description"`
@@ -34,4 +44,6 @@ type Artifact struct {
 	CreatedAt        time.Time       `json:"createdAt"`
 	ContentURL       string          `json:"contentUrl"`
 	PublicURL        string          `json:"publicUrl"`
+	Links            []ArtifactRef   `json:"links,omitempty"`
+	Backlinks        []ArtifactRef   `json:"backlinks,omitempty"`
 }
